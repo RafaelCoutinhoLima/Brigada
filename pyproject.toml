@@ -1,0 +1,43 @@
+[project]
+name = "brigada"
+version = "0.1.0"
+description = "Multi-agent platform for restaurant owners, built from scratch on the Claude API"
+requires-python = ">=3.12"
+dependencies = [
+  "anthropic>=0.40",
+  "mcp>=1.0",
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "pydantic>=2.8",
+  "pydantic-settings>=2.4",
+  "psycopg[binary,pool]>=3.2",
+  "pgvector>=0.3",
+  "scikit-learn>=1.5",
+  "opentelemetry-sdk>=1.27",
+  "httpx>=0.27",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "faker>=28"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/brigada"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-m 'not db'"
+markers = ["db: requires a running Postgres (DATABASE_URL)"]
