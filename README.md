@@ -79,6 +79,10 @@ uv run python -m brigada.runtime "Quanto vendi ontem?" --restaurant 1 --today 20
 uv run python -m brigada.runtime "Qual prato tem mais reclamações?" --agent menu --restaurant 2
 uv run python -m brigada.runtime "Onde as entregas atrasam?" --agent operations --restaurant 3
 uv run python -m brigada.runtime --resume <run_id>   # continue a run that failed
+
+# live console: one pane per agent, updated every second; dispatch questions from the prompt
+uv run uvicorn brigada.api.main:app   # then open http://localhost:8000/console (needs API_KEYS)
+# http://localhost:8000/console?demo  -> simulated runs, no server data or API cost
 ```
 
 ## Data

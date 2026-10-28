@@ -27,7 +27,7 @@
 | RAG | `src/brigada/rag` | Indexing, hybrid retrieval, reranking |
 | Router | `src/brigada/router` | Complexity classifier and model selection |
 | Observability | `src/brigada/observability` | OpenTelemetry setup, cost accounting |
-| API | `src/brigada/api` | FastAPI routes |
+| API | `src/brigada/api` | FastAPI routes; `/console` live view of each specialist's runs |
 | Evals | `evals/` | Cases, metrics, judge, CI gate |
 
 ## Data model

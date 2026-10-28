@@ -1,0 +1,161 @@
+import asyncio
+import os
+import uuid
+from collections.abc import Iterator
+from datetime import date
+from typing import Any
+
+import anthropic
+import httpx2
+import psycopg
+import pytest
+from fastapi.testclient import TestClient
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from brigada.api import console
+from brigada.api.main import app
+from brigada.config import Settings, get_settings
+from brigada.mcp_server.server import build_server
+from brigada.runtime.specialists import SALES, ask
+from brigada.runtime.state import RunStore
+from tests.runtime.fakes import FakeClient, message, text, tool_use
+
+TODAY = date(2026, 10, 28)
+SETTINGS = Settings(api_keys="test-key=1,7; other-key=3", anthropic_api_key="sk-test")
+
+
+@pytest.fixture
+def client(spans: InMemorySpanExporter) -> Iterator[TestClient]:
+    settings = SETTINGS.model_copy(
+        update={"database_url": os.environ.get("DATABASE_URL", SETTINGS.database_url)}
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    with TestClient(app, headers={"X-API-Key": "test-key"}) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+def test_page_is_served_without_a_key(client: TestClient) -> None:
+    resp = client.get("/console", headers={"X-API-Key": ""})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "BRIGADA" in resp.text
+    assert "innerHTML = `" not in resp.text.split("render(state)")[1]  # data goes via textContent
+
+
+def test_runs_need_a_valid_key(client: TestClient) -> None:
+    resp = client.get("/console/runs?restaurant_id=1", headers={"X-API-Key": "nope"})
+    assert resp.status_code == 401
+
+
+def test_runs_refuse_a_restaurant_outside_the_key_scope(client: TestClient) -> None:
+    assert client.get("/console/runs?restaurant_id=3").status_code == 403
+
+
+def test_dispatch_refuses_a_restaurant_outside_the_key_scope(client: TestClient) -> None:
+    body = {"question": "oi", "restaurant_id": 3, "agents": ["sales"]}
+    assert client.post("/console/dispatch", json=body).status_code == 403
+
+
+def test_dispatch_rejects_unknown_agents(client: TestClient) -> None:
+    body = {"question": "oi", "restaurant_id": 1, "agents": ["chef"]}
+    assert client.post("/console/dispatch", json=body).status_code == 422
+
+
+def test_dispatch_without_model_key_is_503(client: TestClient) -> None:
+    app.dependency_overrides[get_settings] = lambda: Settings(api_keys="test-key=1")
+    body = {"question": "oi", "restaurant_id": 1, "agents": ["sales"]}
+    resp = client.post("/console/dispatch", json=body)
+    assert resp.status_code == 503
+    assert "ANTHROPIC_API_KEY" in resp.json()["detail"]
+
+
+def test_dispatch_starts_one_run_per_agent(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[tuple[str, str, int, date, str]] = []
+
+    async def fake_ask(specialist: Any, question: str, rid: int, today: date, **kw: Any) -> None:
+        started.append((specialist.name, question, rid, today, kw["run_id"]))
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(console.specialists, "ask", fake_ask)
+    body = {
+        "question": "Por que caiu?",
+        "restaurant_id": 1,
+        "agents": ["sales", "operations", "sales"],
+        "today": "2026-10-28",
+    }
+    resp = client.post("/console/dispatch", json=body)
+    assert resp.status_code == 202
+    runs = resp.json()["runs"]
+    assert [r["agent"] for r in runs] == ["sales", "operations"]
+    client.get("/health")  # let the background tasks run on the app's loop
+    assert sorted((s[0], s[4]) for s in started) == sorted((r["agent"], r["run_id"]) for r in runs)
+    assert {s[3] for s in started} == {TODAY}
+
+
+@pytest.mark.db
+async def test_runs_show_each_step_and_hide_error_details(client: TestClient) -> None:
+    store = RunStore(os.environ["DATABASE_URL"])
+    ok, bad = f"test-{uuid.uuid4().hex}", f"test-{uuid.uuid4().hex}"
+    args = {"restaurant_id": 1, "start_date": "2026-10-27", "end_date": "2026-10-27"}
+    model = FakeClient(
+        message(tool_use("toolu_1", "sales_by_period", **args), stop_reason="tool_use"),
+        message(text("Ontem: R$ 10,00.")),
+    )
+    try:
+        await ask(
+            SALES,
+            "Quanto vendi ontem?",
+            1,
+            TODAY,
+            client=model,
+            server=build_server(),
+            run_id=ok,
+            store=store,
+        )
+        secret = anthropic.BadRequestError(
+            "secret upstream detail",
+            response=httpx2.Response(
+                400, request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+            ),
+            body=None,
+        )
+        with pytest.raises(anthropic.BadRequestError):
+            await ask(
+                SALES,
+                "oi",
+                1,
+                TODAY,
+                client=FakeClient(secret),
+                server=build_server(),
+                run_id=bad,
+                store=store,
+            )
+
+        resp = client.get("/console/runs?restaurant_id=1&limit=30")
+        assert resp.status_code == 200
+        state = resp.json()
+        assert {a["name"] for a in state["agents"]} == {"sales", "menu", "operations"}
+        runs = {r["id"]: r for r in state["runs"]}
+
+        good = runs[ok]
+        assert good["status"] == "succeeded"
+        assert good["answer"] == "Ontem: R$ 10,00."
+        kinds = [(e["kind"], e["tool"]) for e in good["events"]]
+        assert kinds == [
+            ("call", "sales_by_period"),
+            ("result", "sales_by_period"),
+            ("text", None),
+        ]
+        assert "start_date=2026-10-27" in good["events"][0]["text"]
+        assert good["events"][1]["size"] > 0 and not good["events"][1]["is_error"]
+
+        failed = runs[bad]
+        assert failed["status"] == "failed"
+        assert failed["error_type"] == "BadRequestError"
+        assert "secret" not in resp.text
+    finally:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            conn.execute("DELETE FROM runs WHERE id = ANY(%s)", ([ok, bad],))
