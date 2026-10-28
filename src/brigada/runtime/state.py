@@ -20,7 +20,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from brigada.runtime.agent import Agent
-from brigada.runtime.types import RunResult, ToolCall, ToolOutcome
+from brigada.runtime.types import AgentError, RunResult, ToolCall, ToolOutcome
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,8 @@ class RunRecord:
     restaurant_id: int
     question: str
     today: date
+    model: str
+    prompt_sha256: str
     status: str
     messages: list[MessageParam]
     result: RunResult
@@ -153,6 +155,8 @@ class RunStore:
             row["restaurant_id"],
             row["question"],
             row["today"],
+            row["model"],
+            row["prompt_sha256"],
             row["status"],
             messages,
             result,
@@ -229,26 +233,66 @@ async def run_persisted(
     return await _drive(agent, store, run_id, messages, RunResult(text="", steps=0))
 
 
-async def resume_persisted(agent: Agent, store: RunStore, record: RunRecord) -> RunResult:
-    """Continue a run that failed (crash, max steps, API outage) from its last checkpoint."""
+async def resume_persisted(
+    agent: Agent, store: RunStore, record: RunRecord, *, prompt_sha256: str
+) -> RunResult:
+    """Continue a failed or interrupted run (crash, API outage, step limit) from its last
+    checkpoint, with a fresh step budget.
+
+    Refused when the run succeeded, when it ended on an answer that was truncated or refused
+    (ask the question again instead), or when the model or prompt changed since it started:
+    mixing two models or two prompt versions in one run would make its cost and its eval
+    results lie.
+    """
     if record.status == "succeeded":
         raise ValueError(f"run {record.id!r} already succeeded")
+    if record.messages and record.messages[-1]["role"] == "assistant" and not _pending(record):
+        raise ValueError(
+            f"run {record.id!r} ended on a truncated or refused answer; ask the question again"
+        )
+    if agent.config.model != record.model:
+        raise ValueError(
+            f"run {record.id!r} started on {record.model!r}; refusing to resume on "
+            f"{agent.config.model!r}"
+        )
+    if prompt_sha256 != record.prompt_sha256:
+        raise ValueError(
+            f"run {record.id!r} started with prompt {record.prompt_sha256}; the prompt is now "
+            f"{prompt_sha256}"
+        )
     if record.status == "failed":
         await store.reopen(record.id)
-    return await _drive(agent, store, record.id, record.messages, record.result)
+    return await _drive(agent, store, record.id, record.messages, record.result, fresh_budget=True)
 
 
 async def _drive(
-    agent: Agent, store: RunStore, run_id: str, messages: list[MessageParam], result: RunResult
+    agent: Agent,
+    store: RunStore,
+    run_id: str,
+    messages: list[MessageParam],
+    result: RunResult,
+    *,
+    fresh_budget: bool = False,
 ) -> RunResult:
     agent.observer = PersistingObserver(store, run_id)
+    result.run_id = run_id
     try:
-        result = await agent.resume(messages, result)
+        result = await agent.resume(messages, result, fresh_budget=fresh_budget)
     except Exception as exc:  # CancelledError is not caught: the run stays "running", resumable
+        if isinstance(exc, AgentError):
+            exc.run_id = run_id
         await store.fail(run_id, exc)
         raise
     await store.succeed(run_id, result.text)
     return result
+
+
+def _pending(record: RunRecord) -> bool:
+    last = record.messages[-1]["content"]
+    return not isinstance(last, str) and any(
+        (b if isinstance(b, dict) else b.to_dict()).get("type") == "tool_use"  # type: ignore[union-attr]
+        for b in last
+    )
 
 
 def _answered_tool_calls(messages: Sequence[MessageParam]) -> list[ToolCall]:

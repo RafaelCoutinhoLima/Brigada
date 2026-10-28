@@ -33,10 +33,16 @@ class RunResult:
     tokens_out: int = 0
     cost_usd: Decimal = Decimal(0)
     tools_called: list[ToolCall] = field(default_factory=list)
+    run_id: str | None = None
 
 
 class AgentError(RuntimeError):
-    """Base class: every way a run can end without a valid answer."""
+    """Base class: every way a run can end without a valid answer.
+
+    ``run_id`` is filled in when the run was persisted, so the caller can resume it.
+    """
+
+    run_id: str | None = None
 
 
 class MaxStepsExceeded(AgentError):

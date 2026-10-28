@@ -2,11 +2,12 @@ import json
 import subprocess
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from brigada.mcp_server.server import build_server
-from brigada.runtime.mcp_tools import mcp_toolbox, stdio_server
+from brigada.runtime.mcp_tools import mcp_toolbox, read_untrusted, stdio_server
 from brigada.runtime.sales import SALES_TOOLS, ask_sales, sales_system_prompt
 from brigada.runtime.tools import ToolExecutionError
 from brigada.runtime.types import MaxStepsExceeded, ToolCall
@@ -142,3 +143,53 @@ def test_child_process_ignores_the_parents_dotenv(tmp_path: Path) -> None:
         check=True,
     )
     assert "canary" not in out.stdout
+
+
+READ_AND_WRITE = ("reviews_for_item", "pause_menu_item", "list_menu_items")
+
+
+@pytest.mark.db
+async def test_write_tools_are_disabled_after_reading_untrusted_reviews() -> None:
+    pause = ToolCall(
+        "toolu_2", "pause_menu_item", {"restaurant_id": 3, "menu_item_id": 301, "reason": "x"}
+    )
+    async with mcp_toolbox("test-taint", 3, READ_AND_WRITE, build_server()) as box:
+        await box.executor(ToolCall("toolu_1", "reviews_for_item", {"restaurant_id": 3}))
+        with pytest.raises(ToolExecutionError, match="customer-written text"):
+            await box.executor(pause)
+
+
+@pytest.mark.db
+async def test_write_tools_work_when_nothing_untrusted_was_read() -> None:
+    async with mcp_toolbox("test-taint", 3, READ_AND_WRITE, build_server()) as box:
+        items = json.loads(
+            await box.executor(ToolCall("toolu_1", "list_menu_items", {"restaurant_id": 3}))
+        )
+        item = items["items"][0]["menu_item_id"]
+        out = json.loads(
+            await box.executor(
+                ToolCall(
+                    "toolu_2",
+                    "pause_menu_item",
+                    {"restaurant_id": 3, "menu_item_id": item, "reason": "pedido do dono"},
+                )
+            )
+        )
+    assert out["status"] == "pending"
+
+
+@pytest.mark.db
+async def test_taint_survives_a_resume() -> None:
+    history: list[Any] = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": [tool_use("t1", "reviews_for_item", restaurant_id=3)]},
+    ]
+    assert read_untrusted(history)
+    pause = ToolCall(
+        "toolu_2", "pause_menu_item", {"restaurant_id": 3, "menu_item_id": 301, "reason": "x"}
+    )
+    async with mcp_toolbox(
+        "test-taint", 3, READ_AND_WRITE, build_server(), tainted=read_untrusted(history)
+    ) as box:
+        with pytest.raises(ToolExecutionError, match="customer-written text"):
+            await box.executor(pause)

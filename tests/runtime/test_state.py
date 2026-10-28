@@ -16,7 +16,7 @@ from brigada.runtime.agent import Agent, AgentConfig
 from brigada.runtime.retry import RetryPolicy
 from brigada.runtime.sales import ask_sales, resume_sales
 from brigada.runtime.state import RunStore, resume_persisted, run_persisted
-from brigada.runtime.types import ToolCall
+from brigada.runtime.types import MaxStepsExceeded, ResponseTruncated, ToolCall
 
 from .fakes import MODEL, FakeClient, message, text, tool_use
 
@@ -118,7 +118,9 @@ async def test_failed_run_resumes_from_last_checkpoint(store: RunStore) -> None:
 
     second = FakeClient(message(text("R$ 412,30"), input_tokens=1200, output_tokens=30))
     record = await store.load(rid)
-    result = await resume_persisted(make_agent(second, executor), store, record)
+    result = await resume_persisted(
+        make_agent(second, executor), store, record, prompt_sha256="abc123"
+    )
 
     assert result.text == "R$ 412,30"
     assert result.steps == 2
@@ -154,7 +156,7 @@ async def test_crash_between_model_and_tools_runs_the_pending_tools(store: RunSt
     record = await store.load(rid)
     assert record.status == "running" and record.result.tools_called == []
     result = await resume_persisted(
-        make_agent(FakeClient(message(text("ok"))), executor), store, record
+        make_agent(FakeClient(message(text("ok"))), executor), store, record, prompt_sha256="abc123"
     )
     assert [c.id for c in executor.calls] == ["toolu_9"]
     assert result.steps == 2
@@ -164,7 +166,9 @@ async def test_succeeded_run_cannot_be_resumed(store: RunStore) -> None:
     rid = run_id()
     await start(make_agent(FakeClient(message(text("ok"))), Executor()), store, rid)
     with pytest.raises(ValueError, match="already succeeded"):
-        await resume_persisted(make_agent(FakeClient(), Executor()), store, await store.load(rid))
+        await resume_persisted(
+            make_agent(FakeClient(), Executor()), store, await store.load(rid), prompt_sha256="x"
+        )
 
 
 async def test_checkpoint_refused_after_run_finished(store: RunStore) -> None:
@@ -195,3 +199,67 @@ async def test_sales_run_resumes_with_original_date_and_restaurant(store: RunSto
     await resume_sales(rid, store, client=second, server=build_server())
     assert "hoje: 2026-10-28" in second.messages.requests[0]["system"]
     assert rows("SELECT status FROM runs WHERE id = %s", rid)[0]["status"] == "succeeded"
+
+
+async def test_resume_refuses_a_different_model_or_prompt(store: RunStore) -> None:
+    rid = run_id()
+    with pytest.raises(anthropic.BadRequestError):
+        await start(make_agent(FakeClient(bad_request()), Executor()), store, rid)
+    record = await store.load(rid)
+    assert (record.model, record.prompt_sha256) == (MODEL, "abc123")
+    with pytest.raises(ValueError, match="prompt"):
+        await resume_persisted(
+            make_agent(FakeClient(), Executor()), store, record, prompt_sha256="changed"
+        )
+    other = make_agent(FakeClient(), Executor())
+    other.config = AgentConfig(name="sales", model="claude-haiku-4-5", system="s")
+    with pytest.raises(ValueError, match="refusing to resume on"):
+        await resume_persisted(other, store, record, prompt_sha256="abc123")
+
+
+async def test_max_steps_failure_can_be_resumed_with_a_fresh_budget(store: RunStore) -> None:
+    rid = run_id()
+    looping = [
+        message(tool_use(f"toolu_{i}", "sales_by_period"), stop_reason="tool_use") for i in range(3)
+    ]
+    agent = make_agent(FakeClient(*looping), Executor())
+    agent.config = AgentConfig(name="sales", model=MODEL, system="s", max_steps=3)
+    with pytest.raises(MaxStepsExceeded) as info:
+        await start(agent, store, rid)
+    assert info.value.run_id == rid  # the caller knows what to resume
+    resumed = make_agent(FakeClient(message(text("pronto"))), Executor())
+    result = await resume_persisted(resumed, store, await store.load(rid), prompt_sha256="abc123")
+    assert (result.text, result.steps, result.run_id) == ("pronto", 4, rid)
+
+
+async def test_truncated_run_is_not_resumable(store: RunStore) -> None:
+    rid = run_id()
+    with pytest.raises(ResponseTruncated):
+        await start(
+            make_agent(
+                FakeClient(message(text("Ontem voc"), stop_reason="max_tokens")), Executor()
+            ),
+            store,
+            rid,
+        )
+    with pytest.raises(ValueError, match="truncated or refused"):
+        await resume_persisted(
+            make_agent(FakeClient(), Executor()),
+            store,
+            await store.load(rid),
+            prompt_sha256="abc123",
+        )
+
+
+async def test_ask_sales_returns_its_run_id(store: RunStore) -> None:
+    rid = run_id()
+    result = await ask_sales(
+        "oi",
+        1,
+        TODAY,
+        client=FakeClient(message(text("ok"))),
+        server=build_server(),
+        run_id=rid,
+        store=store,
+    )
+    assert result.run_id == rid

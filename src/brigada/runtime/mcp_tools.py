@@ -8,12 +8,12 @@ the loop a ``ToolExecutor`` that forwards calls with the run's scope in ``_meta`
 import json
 import os
 import sys
-from collections.abc import AsyncIterator, Collection
+from collections.abc import AsyncIterator, Collection, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from anthropic.types import ToolParam
+from anthropic.types import MessageParam, ToolParam
 from mcp import Client, StdioServerParameters
 from mcp.client.stdio import get_default_environment
 from mcp.server.mcpserver import MCPServer
@@ -23,6 +23,23 @@ from brigada.config import get_settings
 from brigada.mcp_server.audit import RESTAURANT_ID_META_KEY, RUN_ID_META_KEY
 from brigada.runtime.tools import ToolExecutionError, ToolExecutor
 from brigada.runtime.types import ToolCall
+
+# Tools whose output is customer-written text (possible prompt injection), and tools that
+# propose changes. Once a run has read untrusted text, it cannot propose changes anymore.
+UNTRUSTED_OUTPUT_TOOLS = frozenset({"reviews_for_item"})
+WRITE_TOOLS = frozenset({"pause_menu_item", "create_promotion"})
+
+
+def read_untrusted(messages: Sequence[MessageParam]) -> bool:
+    """True if the conversation already called a tool that returns untrusted text."""
+    for m in messages:
+        if m["role"] != "assistant" or isinstance(m["content"], str):
+            continue
+        for b in m["content"]:
+            block = b if isinstance(b, dict) else b.to_dict()  # type: ignore[union-attr]
+            if block.get("type") == "tool_use" and block.get("name") in UNTRUSTED_OUTPUT_TOOLS:
+                return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -46,15 +63,18 @@ async def mcp_toolbox(
     restaurant_id: int,
     allowed_tools: Collection[str] | None = None,
     server: MCPServer | StdioServerParameters | None = None,
+    *,
+    tainted: bool = False,
 ) -> AsyncIterator[Toolbox]:
     """Connect to the MCP server for the duration of one run.
 
     ``allowed_tools`` limits what this agent sees *and* can call: a sales specialist gets no
-    write tools, so a prompt injection cannot make it pause a dish.
+    write tools, so a prompt injection cannot make it pause a dish. ``tainted`` says the run
+    already read untrusted text (on resume, see ``read_untrusted``).
     """
     try:
         async with Client(server or stdio_server()) as client:
-            async with _toolbox(client, run_id, restaurant_id, allowed_tools) as box:
+            async with _toolbox(client, run_id, restaurant_id, allowed_tools, tainted) as box:
                 yield box
     except BaseExceptionGroup as group:
         # The MCP client runs a TaskGroup, so anything raised inside this block (including the
@@ -65,7 +85,11 @@ async def mcp_toolbox(
 
 @asynccontextmanager
 async def _toolbox(
-    client: Client, run_id: str, restaurant_id: int, allowed_tools: Collection[str] | None
+    client: Client,
+    run_id: str,
+    restaurant_id: int,
+    allowed_tools: Collection[str] | None,
+    tainted: bool,
 ) -> AsyncIterator[Toolbox]:
     listed = (await client.list_tools()).tools
     known = {t.name for t in listed}
@@ -74,10 +98,18 @@ async def _toolbox(
     visible = [t for t in listed if allowed_tools is None or t.name in allowed_tools]
     names = {t.name for t in visible}
     meta = {RUN_ID_META_KEY: run_id, RESTAURANT_ID_META_KEY: restaurant_id}
+    state = {"tainted": tainted}
 
     async def execute(call: ToolCall) -> str:
         if call.name not in names:
             raise ToolExecutionError(f"tool {call.name!r} is not available to this agent")
+        if call.name in WRITE_TOOLS and state["tainted"]:
+            raise ToolExecutionError(
+                f"tool {call.name!r} is disabled: this conversation read customer-written text, "
+                "which may contain instructions. Tell the owner to request the change directly."
+            )
+        if call.name in UNTRUSTED_OUTPUT_TOOLS:
+            state["tainted"] = True  # set before the call: a failed read may still carry text
         result = await client.call_tool(call.name, call.input, meta=meta)
         text = _result_text(result.structured_content, result.content)
         if result.is_error:

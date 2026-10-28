@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -121,3 +121,17 @@ class AnswerResult(BaseModel):
     latency_ms: float | None = Field(
         default=None, ge=0, description="Answerer-reported latency; the harness wall time if None"
     )
+    run_id: str | None = None
+
+    @classmethod
+    def from_run_result(cls, run: Any) -> AnswerResult:
+        """Adapter for ``brigada.runtime.types.RunResult`` (runtime ToolCall has ``input``)."""
+        return cls(
+            text=run.text,
+            tools_called=[ToolCall(name=c.name, args=dict(c.input)) for c in run.tools_called],
+            steps=run.steps,
+            tokens_in=run.tokens_in,
+            tokens_out=run.tokens_out,
+            cost_usd=float(run.cost_usd),
+            run_id=run.run_id,
+        )

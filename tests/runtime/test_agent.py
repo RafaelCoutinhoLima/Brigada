@@ -216,3 +216,20 @@ async def test_resume_refuses_a_finished_conversation() -> None:
     ]
     with pytest.raises(ValueError, match="already ended"):
         await agent(FakeClient()).resume(messages, RunResult(text="", steps=1))
+
+
+async def test_fresh_budget_lets_a_resumed_run_continue() -> None:
+    messages: list[MessageParam] = [{"role": "user", "content": "q"}]
+    looping = [
+        message(tool_use(f"toolu_{i}", "sales_by_period"), stop_reason="tool_use") for i in range(2)
+    ]
+    first = agent(FakeClient(*looping), max_steps=2)
+    result = RunResult(text="", steps=0)
+    with pytest.raises(MaxStepsExceeded):
+        await first.resume(messages, result)
+    assert result.steps == 2
+    second = agent(FakeClient(message(text("ok"))), max_steps=2)
+    with pytest.raises(MaxStepsExceeded):  # same budget: nothing left
+        await second.resume(list(messages), RunResult(text="", steps=2))
+    done = await second.resume(messages, result, fresh_budget=True)
+    assert done.text == "ok" and done.steps == 3

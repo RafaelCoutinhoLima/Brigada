@@ -92,12 +92,18 @@ class Agent:
         messages: list[MessageParam] = [{"role": "user", "content": question}]
         return await self.resume(messages, RunResult(text="", steps=0))
 
-    async def resume(self, messages: list[MessageParam], result: RunResult) -> RunResult:
+    async def resume(
+        self, messages: list[MessageParam], result: RunResult, *, fresh_budget: bool = False
+    ) -> RunResult:
         """Continue a conversation from wherever it stopped.
 
         If the last message is the model asking for tools (the process died before the tool
         results were saved), the tools run first. ``result`` carries the counters so far.
+        With ``fresh_budget`` the run gets ``max_steps`` more model calls from here (used when
+        resuming a run that failed, e.g. with ``MaxStepsExceeded``); otherwise the budget
+        counts from the start of the conversation.
         """
+        limit = result.steps + self.config.max_steps if fresh_budget else self.config.max_steps
         if not messages:
             raise ValueError("cannot resume an empty conversation")
         if _pending_tool_calls(messages):
@@ -106,7 +112,7 @@ class Agent:
             # The model already answered; calling it again would send an assistant-last
             # conversation (a prefill), which current models reject.
             raise ValueError("conversation already ended with an assistant answer")
-        while result.steps < self.config.max_steps:
+        while result.steps < limit:
             response = await self._call_model(messages, result)
             match response.stop_reason:
                 case "end_turn" | "stop_sequence":

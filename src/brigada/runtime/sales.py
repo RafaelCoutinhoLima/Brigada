@@ -10,7 +10,7 @@ from mcp.server.mcpserver import MCPServer
 from brigada.config import get_settings
 from brigada.prompts import load_prompt
 from brigada.runtime.agent import Agent, AgentConfig, ModelClient, make_client
-from brigada.runtime.mcp_tools import mcp_toolbox
+from brigada.runtime.mcp_tools import mcp_toolbox, read_untrusted
 from brigada.runtime.state import RunStore, resume_persisted, run_persisted
 from brigada.runtime.tools import ToolExecutor
 from brigada.runtime.types import RunResult
@@ -46,7 +46,9 @@ async def ask_sales(
     async with mcp_toolbox(run_id, restaurant_id, SALES_TOOLS, server) as toolbox:
         agent = _sales_agent(restaurant_id, today, client, toolbox.tools, toolbox.executor)
         if store is None:
-            return await agent.run(question)
+            result = await agent.run(question)
+            result.run_id = run_id
+            return result
         return await run_persisted(
             agent,
             store,
@@ -68,11 +70,16 @@ async def resume_sales(
     record = await store.load(run_id)
     if record.agent != "sales":
         raise ValueError(f"run {run_id!r} belongs to agent {record.agent!r}, not 'sales'")
-    async with mcp_toolbox(run_id, record.restaurant_id, SALES_TOOLS, server) as toolbox:
+    tainted = read_untrusted(record.messages)
+    async with mcp_toolbox(
+        run_id, record.restaurant_id, SALES_TOOLS, server, tainted=tainted
+    ) as toolbox:
         agent = _sales_agent(
             record.restaurant_id, record.today, client, toolbox.tools, toolbox.executor
         )
-        return await resume_persisted(agent, store, record)
+        return await resume_persisted(
+            agent, store, record, prompt_sha256=load_prompt("sales").sha256
+        )
 
 
 def _sales_agent(

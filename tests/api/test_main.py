@@ -12,6 +12,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 import brigada
 from brigada.api.main import ORCHESTRATOR_MODULE, ORCHESTRATOR_PACKAGE, app, get_answerer
 from brigada.config import Settings, get_settings
+from brigada.runtime.types import AgentError, MaxStepsExceeded, ModelRefused, ResponseTruncated
 
 
 @dataclass
@@ -185,3 +186,44 @@ def test_ask_rejects_everything_when_no_keys_configured(client: TestClient) -> N
 def test_malformed_api_keys_setting_is_an_error() -> None:
     with pytest.raises(ValueError, match="Malformed"):
         Settings(api_keys="no-equals-sign").api_key_scopes()
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code"),
+    [
+        (ModelRefused("cyber", "no"), 422),
+        (ResponseTruncated("cut"), 502),
+        (MaxStepsExceeded(10), 500),
+    ],
+)
+def test_agent_errors_are_structured_and_traceable(
+    client: TestClient, error: AgentError, status_code: int
+) -> None:
+    error.run_id = "run-42"
+
+    def failing(question: str, restaurant_id: int, today: date) -> FakeOutcome:
+        raise error
+
+    app.dependency_overrides[get_answerer] = lambda: failing
+    resp = client.post("/ask", json={"question": "oi", "restaurant_id": 1})
+    assert resp.status_code == status_code
+    body = resp.json()
+    assert body["error_type"] == type(error).__name__
+    assert body["run_id"] == "run-42"
+    assert body["trace_id"] == resp.headers["X-Trace-ID"]
+    assert resp.headers["X-Request-ID"]
+
+
+def test_upstream_error_is_503_without_details(client: TestClient) -> None:
+    import anthropic
+    import httpx2
+
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+
+    def failing(question: str, restaurant_id: int, today: date) -> FakeOutcome:
+        raise anthropic.APIConnectionError(message="secret-host:443 refused", request=request)
+
+    app.dependency_overrides[get_answerer] = lambda: failing
+    resp = client.post("/ask", json={"question": "oi", "restaurant_id": 1})
+    assert resp.status_code == 503
+    assert "secret-host" not in resp.text

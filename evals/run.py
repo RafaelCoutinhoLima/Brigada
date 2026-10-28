@@ -30,6 +30,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, Field
 
+from brigada.runtime.types import RunResult
 from evals.cases import CASES_PATH, load_cases
 from evals.schema import CATEGORIES, AnswerResult, Case
 from evals.scoring import score_case
@@ -157,6 +158,8 @@ async def _call(answerer: Answerer, case: Case, today: date) -> AnswerResult:
         result = await result
     if isinstance(result, AnswerResult):
         return result
+    if isinstance(result, RunResult):
+        return AnswerResult.from_run_result(result)
     return AnswerResult.model_validate(result)
 
 

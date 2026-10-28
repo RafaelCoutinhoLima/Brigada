@@ -15,8 +15,10 @@ from decimal import Decimal
 from typing import Annotated, cast
 from zoneinfo import ZoneInfo
 
+import anthropic
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
@@ -24,6 +26,13 @@ from brigada import __version__
 from brigada.api.schemas import Answerer, AnswerOutcome, AskRequest, AskResponse, HealthResponse
 from brigada.config import Settings, get_settings
 from brigada.observability.tracing import current_trace_id, get_tracer, setup_tracing
+from brigada.runtime.types import (
+    AgentError,
+    MaxStepsExceeded,
+    ModelRefused,
+    ResponseTruncated,
+    UnexpectedStopReason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +63,7 @@ async def trace_request(
     none is active (older FastAPI), we open our own so every request still has a trace id.
     """
     request_id = request.headers.get(REQUEST_ID_HEADER) or uuid.uuid4().hex
+    request.state.request_id = request_id
     if trace.get_current_span().get_span_context().is_valid:
         return await _annotate(request_id, call_next, request)
     with get_tracer().start_as_current_span(
@@ -78,6 +88,50 @@ async def _annotate(
     if trace_id is not None:
         response.headers[TRACE_ID_HEADER] = trace_id
     return response
+
+
+# How each way of failing maps to HTTP. The body always says which one it was, and carries
+# run_id (to resume) and trace_id (to investigate).
+_AGENT_ERROR_STATUS: dict[type[AgentError], int] = {
+    ModelRefused: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    ResponseTruncated: status.HTTP_502_BAD_GATEWAY,
+    UnexpectedStopReason: status.HTTP_502_BAD_GATEWAY,
+    MaxStepsExceeded: status.HTTP_500_INTERNAL_SERVER_ERROR,
+}
+
+
+def _error_response(request: Request, code: int, exc: Exception, message: str) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", None)
+    trace_id = current_trace_id()
+    headers = {REQUEST_ID_HEADER: request_id} if request_id else {}
+    if trace_id:
+        headers[TRACE_ID_HEADER] = trace_id
+    body = {
+        "error_type": type(exc).__name__,
+        "message": message,
+        "run_id": getattr(exc, "run_id", None),
+        "trace_id": trace_id,
+    }
+    return JSONResponse(status_code=code, content=body, headers=headers)
+
+
+@app.exception_handler(AgentError)
+async def agent_error(request: Request, exc: AgentError) -> JSONResponse:
+    logger.warning("agent run failed: %s", exc)
+    code = next(
+        (c for t, c in _AGENT_ERROR_STATUS.items() if isinstance(exc, t)),
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+    return _error_response(request, code, exc, str(exc))
+
+
+@app.exception_handler(anthropic.APIError)
+async def upstream_error(request: Request, exc: anthropic.APIError) -> JSONResponse:
+    # The upstream message can include request details; the client gets a generic one.
+    logger.exception("Claude API error")
+    return _error_response(
+        request, status.HTTP_503_SERVICE_UNAVAILABLE, exc, "model provider unavailable"
+    )
 
 
 @app.get("/health", response_model=HealthResponse)

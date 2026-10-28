@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
+from brigada.runtime.types import RunResult
+from brigada.runtime.types import ToolCall as RuntimeToolCall
 from evals import dummy, oracle
 from evals.cases import load_cases
 from evals.oracle import format_ptbr
@@ -16,6 +19,7 @@ from evals.run import (
     AnswererNotFoundError,
     BaselineError,
     RunReport,
+    _call,
     check_baseline,
     evaluate,
     load_report,
@@ -206,3 +210,21 @@ def test_results_json_is_plain_json(tmp_path: Path) -> None:
     data = json.loads(out.read_text(encoding="utf-8"))
     assert set(data) == {"meta", "summary", "cases"}
     assert data["summary"]["by_category"]["security"]["n"] == 2
+
+
+async def test_runtime_run_result_is_accepted_with_tool_args() -> None:
+    run = RunResult(
+        text="R$ 930,00",
+        steps=2,
+        cost_usd=Decimal("0.01"),
+        run_id="r1",
+        tools_called=[RuntimeToolCall("toolu_1", "sales_by_period", {"restaurant_id": 1})],
+    )
+
+    async def answerer(question: str, restaurant_id: int, today: date) -> RunResult:
+        return run
+
+    answer = await _call(answerer, load_cases()[0], date(2026, 10, 28))
+    assert answer.tools_called[0].name == "sales_by_period"
+    assert answer.tools_called[0].args == {"restaurant_id": 1}
+    assert answer.run_id == "r1" and answer.cost_usd == 0.01
