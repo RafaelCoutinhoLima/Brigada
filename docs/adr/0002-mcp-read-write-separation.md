@@ -21,9 +21,8 @@ Restrições que importam:
   `menu_item_id` de outro restaurante não pode vazar nem ser alterado. Como o
   `restaurant_id` é um argumento escolhido pelo modelo, uma review maliciosa poderia induzir
   uma leitura de outro restaurante. Por isso o runtime fixa o escopo da execução
-  (`_meta["brigada/restaurant_id"]`) e o servidor recusa e audita qualquer chamada fora dele.
-  Ponto em aberto: hoje o escopo só é exigido quando informado; decidir se passa a ser
-  obrigatório quando o runtime existir.
+  (`_meta["brigada/restaurant_id"]`) e o servidor recusa e audita qualquer chamada fora dele
+  ou sem escopo definido (falha fechada).
 - **Auditoria e avaliação.** Os evals medem "ferramenta certa chamada" e o crítico exige que
   todo número venha de um resultado de ferramenta; isso pede saídas estáveis e auditáveis.
 - **Falhas nunca silenciosas** (CLAUDE.md).

@@ -48,3 +48,11 @@ async def test_scope_via_request_meta(db: Conn, run_id: str) -> None:
         )
     assert denied.is_error
     assert not allowed.is_error
+
+
+async def test_call_without_scope_fails_closed(
+    server: BrigadaMCPServer, db: Conn, run_id: str
+) -> None:
+    with pytest.raises(ToolError, match="no restaurant scope bound"):
+        await server.call_tool("sales_by_period", {"restaurant_id": 3, **SALES})
+    assert "no restaurant scope bound" in str(audit_rows(db, run_id)[0]["error"])

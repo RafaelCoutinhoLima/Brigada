@@ -172,7 +172,14 @@ def _resolve_restaurant_id(context: Context[Any, Any] | None) -> int | None:
 
 
 def _check_scope(arguments: dict[str, Any], scope: int | None) -> None:
-    if scope is not None and arguments.get("restaurant_id") != scope:
+    """Fail closed: a call carrying ``restaurant_id`` needs a bound scope that matches it."""
+    if "restaurant_id" not in arguments:
+        return  # unknown tool or malformed call: the SDK rejects it next, and it's audited
+    if scope is None:
+        raise ToolError(
+            f"no restaurant scope bound for this run: pass _meta[{audit.RESTAURANT_ID_META_KEY!r}]"
+        )
+    if arguments["restaurant_id"] != scope:
         raise ToolError(
             f"restaurant_id {arguments.get('restaurant_id')!r} is outside this run's scope"
         )

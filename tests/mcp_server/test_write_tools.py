@@ -10,14 +10,14 @@ from brigada.mcp_server.db import Conn
 from brigada.mcp_server.errors import InvalidStateError, NotFoundError
 from brigada.mcp_server.server import BrigadaMCPServer
 
-from .conftest import audit_rows, menu_item_id
+from .conftest import audit_rows, menu_item_id, scoped_call
 
 # run_id on every test: audit rows it creates are tagged and cleaned up afterwards.
 pytestmark = [pytest.mark.db, pytest.mark.usefixtures("run_id")]
 
 
 async def propose(server: BrigadaMCPServer, name: str, **args: Any) -> dict[str, Any]:
-    result = await server.call_tool(name, args)
+    result = await scoped_call(server, name, args)
     assert not result.is_error and isinstance(result.structured_content, dict)
     return result.structured_content
 
@@ -88,8 +88,10 @@ async def test_pausing_already_paused_item_is_rejected(
     )
     actions.approve(first["action_id"], approved_by="rafael")
     with pytest.raises(ToolError, match="already paused"):
-        await server.call_tool(
-            "pause_menu_item", {"restaurant_id": 1, "menu_item_id": item, "reason": "de novo"}
+        await scoped_call(
+            server,
+            "pause_menu_item",
+            {"restaurant_id": 1, "menu_item_id": item, "reason": "de novo"},
         )
 
 
@@ -154,7 +156,8 @@ async def test_promotion_discount_out_of_bounds_creates_nothing(
 ) -> None:
     item = menu_item_id(db, 2, "Feijoada da casa")
     with pytest.raises(ToolError, match="discount_pct"):
-        await server.call_tool(
+        await scoped_call(
+            server,
             "create_promotion",
             {
                 "restaurant_id": 2,
@@ -174,12 +177,16 @@ async def test_promotion_discount_out_of_bounds_creates_nothing(
 async def test_write_tools_enforce_tenant(server: BrigadaMCPServer, db: Conn, run_id: str) -> None:
     feijoada = menu_item_id(db, 2, "Feijoada da casa")
     with pytest.raises(ToolError, match="does not exist in restaurant 1"):
-        await server.call_tool(
-            "pause_menu_item", {"restaurant_id": 1, "menu_item_id": feijoada, "reason": "teste"}
+        await scoped_call(
+            server,
+            "pause_menu_item",
+            {"restaurant_id": 1, "menu_item_id": feijoada, "reason": "teste"},
         )
     with pytest.raises(ToolError, match="restaurant 999 does not exist"):
-        await server.call_tool(
-            "pause_menu_item", {"restaurant_id": 999, "menu_item_id": feijoada, "reason": "teste"}
+        await scoped_call(
+            server,
+            "pause_menu_item",
+            {"restaurant_id": 999, "menu_item_id": feijoada, "reason": "teste"},
         )
     assert (
         db.execute("SELECT 1 FROM pending_actions WHERE run_id = %s", (run_id,)).fetchone() is None

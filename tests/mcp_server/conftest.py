@@ -8,10 +8,12 @@ other suites (evals) share the same database.
 import uuid
 from collections.abc import Iterator
 from datetime import date
+from typing import Any
 
 import pytest
+from mcp_types import CallToolResult, InputRequiredResult
 
-from brigada.mcp_server.audit import run_context
+from brigada.mcp_server.audit import restaurant_context, run_context
 from brigada.mcp_server.db import Conn, connect
 from brigada.mcp_server.server import BrigadaMCPServer, build_server
 
@@ -67,6 +69,14 @@ def menu_item_id(db: Conn, restaurant_id: int, name: str) -> int:
     ).fetchone()
     assert row is not None, f"menu item {name!r} not found in restaurant {restaurant_id}"
     return int(row["id"])
+
+
+async def scoped_call(
+    server: BrigadaMCPServer, name: str, arguments: dict[str, Any]
+) -> CallToolResult | InputRequiredResult:
+    """Call a tool the way the runtime will: scoped to the restaurant in the arguments."""
+    with restaurant_context(arguments.get("restaurant_id")):
+        return await server.call_tool(name, arguments)
 
 
 def audit_rows(db: Conn, run_id: str) -> list[dict[str, object]]:

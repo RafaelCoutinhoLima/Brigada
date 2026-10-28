@@ -7,8 +7,9 @@
 2. the ``current_run_id`` context variable, for in-process callers (``with run_context(id):``).
 
 ``restaurant_id`` scope works the same way (``_meta["brigada/restaurant_id"]`` or
-``restaurant_context(id)``): when bound, the server rejects any call whose ``restaurant_id``
-argument differs, so injected text can't steer the model into another restaurant's data.
+``restaurant_context(id)``) and is mandatory: the server rejects any call with a
+``restaurant_id`` argument when no scope is bound or when it differs, so injected text can't
+steer the model into another restaurant's data.
 """
 
 from collections.abc import Iterator, Mapping

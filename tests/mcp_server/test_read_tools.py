@@ -7,11 +7,11 @@ import pytest
 from mcp import Client
 from mcp.server.mcpserver.exceptions import ToolError
 
-from brigada.mcp_server.audit import RUN_ID_META_KEY
+from brigada.mcp_server.audit import RESTAURANT_ID_META_KEY, RUN_ID_META_KEY
 from brigada.mcp_server.db import Conn
 from brigada.mcp_server.server import BrigadaMCPServer, build_server
 
-from .conftest import END_DATE, START_DATE, audit_rows, menu_item_id
+from .conftest import END_DATE, START_DATE, audit_rows, menu_item_id, scoped_call
 
 # run_id on every test: audit rows it creates are tagged and cleaned up afterwards.
 pytestmark = [pytest.mark.db, pytest.mark.usefixtures("run_id")]
@@ -20,7 +20,7 @@ PERIOD = {"start_date": START_DATE.isoformat(), "end_date": END_DATE.isoformat()
 
 
 async def call(server: BrigadaMCPServer, name: str, **args: Any) -> dict[str, Any]:
-    result = await server.call_tool(name, args)
+    result = await scoped_call(server, name, args)
     assert not result.is_error
     assert isinstance(result.structured_content, dict)
     return result.structured_content
@@ -191,7 +191,7 @@ async def test_invalid_input_raises_and_is_audited(
     server: BrigadaMCPServer, db: Conn, run_id: str, tool: str, args: dict[str, Any], match: str
 ) -> None:
     with pytest.raises(ToolError, match=match):
-        await server.call_tool(tool, args)
+        await scoped_call(server, tool, args)
     rows = audit_rows(db, run_id)
     assert len(rows) == 1
     assert rows[0]["tool"] == tool and rows[0]["args"] == args
@@ -203,7 +203,9 @@ async def test_menu_item_from_other_restaurant_rejected(
 ) -> None:
     feijoada = menu_item_id(db, 2, "Feijoada da casa")
     with pytest.raises(ToolError, match="does not exist in restaurant 1"):
-        await server.call_tool("reviews_for_item", {"restaurant_id": 1, "menu_item_id": feijoada})
+        await scoped_call(
+            server, "reviews_for_item", {"restaurant_id": 1, "menu_item_id": feijoada}
+        )
 
 
 async def test_success_is_audited_with_result(
@@ -219,7 +221,7 @@ async def test_success_is_audited_with_result(
 
 async def test_unknown_tool_is_audited(server: BrigadaMCPServer, db: Conn, run_id: str) -> None:
     with pytest.raises(ToolError, match="Unknown tool"):
-        await server.call_tool("run_sql", {"query": "SELECT 1"})
+        await scoped_call(server, "run_sql", {"query": "SELECT 1"})
     assert audit_rows(db, run_id)[0]["tool"] == "run_sql"
 
 
@@ -229,7 +231,9 @@ async def test_run_id_travels_in_request_meta(db: Conn, run_id: str) -> None:
     try:
         async with Client(build_server()) as client:
             result = await client.call_tool(
-                "list_menu_items", {"restaurant_id": 1}, meta={RUN_ID_META_KEY: meta_run}
+                "list_menu_items",
+                {"restaurant_id": 1},
+                meta={RUN_ID_META_KEY: meta_run, RESTAURANT_ID_META_KEY: 1},
             )
         assert not result.is_error
         assert [r["tool"] for r in audit_rows(db, meta_run)] == ["list_menu_items"]
@@ -240,7 +244,9 @@ async def test_run_id_travels_in_request_meta(db: Conn, run_id: str) -> None:
 async def test_protocol_error_result_for_bad_restaurant(db: Conn, run_id: str) -> None:
     async with Client(build_server()) as client:
         result = await client.call_tool(
-            "list_menu_items", {"restaurant_id": 999}, meta={RUN_ID_META_KEY: run_id}
+            "list_menu_items",
+            {"restaurant_id": 999},
+            meta={RUN_ID_META_KEY: run_id, RESTAURANT_ID_META_KEY: 999},
         )
     assert result.is_error
     assert audit_rows(db, run_id)[0]["error"] is not None
