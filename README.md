@@ -73,6 +73,10 @@ docker compose up -d db       # Postgres + pgvector; set BRIGADA_DB_PORT if 5432
 uv sync
 uv run python scripts/seed_data.py --reset
 uv run pytest                 # add -m db to run tests against the database
+
+# ask the Sales agent (needs ANTHROPIC_API_KEY); every step is saved in `runs`/`steps`
+uv run python -m brigada.runtime "Quanto vendi ontem?" --restaurant 1 --today 2026-10-28
+uv run python -m brigada.runtime --resume <run_id>   # continue a run that failed
 ```
 
 ## Data

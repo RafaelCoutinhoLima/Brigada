@@ -39,9 +39,12 @@ orders(id, restaurant_id, created_at, total, channel)
 order_items(order_id, menu_item_id, qty, unit_price)
 deliveries(order_id, promised_minutes, actual_minutes)
 reviews(id, restaurant_id, menu_item_id, rating, text, created_at, embedding vector)
-runs(id, question, status, model, started_at, finished_at, cost_usd)
-steps(id, run_id, agent, kind, payload jsonb, tokens_in, tokens_out, latency_ms)
-tool_audit(id, run_id, tool, args jsonb, result jsonb, approved_by, created_at)
+runs(id, agent, restaurant_id, question, today, model, prompt_sha256, status,
+     messages jsonb, steps, tokens_in, tokens_out, cost_usd, answer, error, started_at, finished_at)
+steps(id, run_id, step, kind, payload jsonb, tokens_in, tokens_out, cost_usd, latency_ms)
+tool_audit(id, run_id, tool, args jsonb, result jsonb, error, approved_by, created_at)
+pending_actions(id, run_id, tool, restaurant_id, payload jsonb, status, decided_by, ...)
+promotions(id, restaurant_id, menu_item_id, discount_pct, start_date, end_date, ...)
 ```
 
 ## Threat model (summary)
