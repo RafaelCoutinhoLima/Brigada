@@ -12,6 +12,7 @@
 steer the model into another restaurant's data.
 """
 
+import json
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -58,21 +59,47 @@ def record(
     run_id: str | None = None,
     approved_by: str | None = None,
 ) -> int:
-    """Insert an audit row on ``conn``; the caller owns the transaction. ``result`` is JSON-able."""
+    """Insert an audit row on ``conn``; the caller owns the transaction.
+
+    Everything is passed through ``storable`` first: the audit must never fail because of
+    what the model sent (a NUL byte in an argument used to make the INSERT fail and leave the
+    call with no trace).
+    """
     row = conn.execute(
         "INSERT INTO tool_audit (run_id, tool, args, result, error, approved_by) "
         "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
         (
-            run_id,
-            tool,
-            Jsonb(dict(args)),
-            Jsonb(result) if result is not None else None,
-            error,
-            approved_by,
+            storable(run_id),
+            storable(tool),
+            Jsonb(storable(dict(args))),
+            Jsonb(storable(result)) if result is not None else None,
+            storable(error),
+            storable(approved_by),
         ),
     ).fetchone()
     assert row is not None
     return int(row["id"])
+
+
+def storable(value: Any) -> Any:
+    """JSON-safe copy that Postgres accepts: NUL (U+0000) becomes a visible ``\\u0000`` and
+    anything not JSON-serializable becomes its ``str``."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.replace("\x00", "\\u0000")
+    plain = json.loads(json.dumps(value, default=str))
+    return _strip_nul(plain)
+
+
+def _strip_nul(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "\\u0000")
+    if isinstance(value, dict):
+        return {_strip_nul(k): _strip_nul(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_nul(v) for v in value]
+    return value
 
 
 def record_standalone(**kwargs: Any) -> int:

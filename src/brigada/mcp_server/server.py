@@ -17,11 +17,13 @@ can never be registered as a tool.
 """
 
 import functools
+import logging
 from collections.abc import Callable
 from datetime import date
 from typing import Any
 
 import anyio.to_thread
+import psycopg
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
@@ -64,6 +66,8 @@ INSTRUCTIONS = (
     "that a human must approve outside this server."
 )
 
+logger = logging.getLogger(__name__)
+
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True)
 PROPOSE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False)
 
@@ -94,6 +98,11 @@ async def _run[I: BaseModel, O: BaseModel](fn: Callable[[Conn, I], O], inp: I) -
         return await anyio.to_thread.run_sync(call)
     except DomainError as exc:
         raise ToolError(str(exc)) from exc
+    except psycopg.Error:
+        # Postgres messages carry hosts, users and fragments of the parameters: log them here,
+        # never hand them to the model.
+        logger.exception("database error in %s", getattr(fn, "__name__", fn))
+        raise ToolError("internal database error; the call was not completed") from None
 
 
 def _audit_result(result: CallToolResult | InputRequiredResult) -> Any:
@@ -121,31 +130,45 @@ class BrigadaMCPServer(MCPServer[Any]):
         run_id = _resolve_run_id(context)
         token = audit.current_run_id.set(run_id)
         try:
+            _reject_nul(name, arguments)
             _check_scope(arguments, _resolve_restaurant_id(context))
             result = await super().call_tool(name, arguments, context)
         except Exception as exc:
-            await anyio.to_thread.run_sync(
-                functools.partial(
-                    audit.record_standalone,
-                    tool=name,
-                    args=arguments,
-                    error=_error_text(exc),
-                    run_id=run_id,
-                )
-            )
+            try:
+                await _audit(tool=name, args=arguments, error=_error_text(exc), run_id=run_id)
+            except Exception:
+                # Never let a failed audit replace the real error the caller must see.
+                logger.exception("audit write failed for failed call to %r", name)
             raise
         finally:
             audit.current_run_id.reset(token)
-        await anyio.to_thread.run_sync(
-            functools.partial(
-                audit.record_standalone,
-                tool=name,
-                args=arguments,
-                result=_audit_result(result),
-                run_id=run_id,
-            )
-        )
+        try:
+            await _audit(tool=name, args=arguments, result=_audit_result(result), run_id=run_id)
+        except Exception:
+            # Fail closed: a result we could not audit is not handed out.
+            logger.exception("audit write failed for call to %r", name)
+            raise ToolError("internal error: the call could not be audited") from None
         return result
+
+
+async def _audit(**kwargs: Any) -> None:
+    await anyio.to_thread.run_sync(functools.partial(audit.record_standalone, **kwargs))
+
+
+def _reject_nul(name: str, arguments: dict[str, Any]) -> None:
+    """NUL bytes have no business in a tool call and Postgres cannot store them in text."""
+
+    def has_nul(value: Any) -> bool:
+        if isinstance(value, str):
+            return "\x00" in value
+        if isinstance(value, dict):
+            return any(has_nul(k) or has_nul(v) for k, v in value.items())
+        if isinstance(value, list):
+            return any(has_nul(v) for v in value)
+        return False
+
+    if has_nul(name) or has_nul(arguments):
+        raise ToolError("invalid arguments: NUL characters are not allowed")
 
 
 def _request_meta(context: Context[Any, Any] | None) -> dict[str, Any]:
