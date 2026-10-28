@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -15,6 +18,31 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run pytest
+
+  # The tests that touch Postgres: tenant scope, every MCP tool, write tools, run persistence.
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: brigada
+          POSTGRES_PASSWORD: brigada
+          POSTGRES_DB: brigada
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U brigada" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://brigada:brigada@localhost:5432/brigada
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync --frozen
+      - name: Apply migrations
+        run: for f in db/migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
+      - run: uv run python scripts/seed_data.py --reset --end-date 2026-10-27
+      - run: uv run pytest -m db
 
   docker:
     runs-on: ubuntu-latest
