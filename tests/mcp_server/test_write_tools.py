@@ -66,17 +66,17 @@ async def test_approve_executes_pause_in_one_go(
     out = await propose(
         server, "pause_menu_item", restaurant_id=2, menu_item_id=item, reason="avaliações ruins"
     )
-    decided = actions.approve(out["action_id"], approved_by="rafael")
-    assert decided.status == "executed" and decided.decided_by == "rafael"
+    decided = actions.approve(out["action_id"], approved_by="gerente")
+    assert decided.status == "executed" and decided.decided_by == "gerente"
     assert decided.decided_at is not None
     assert not is_active(db, item)
 
     approvals = [a for a in audit_rows(db, run_id) if a["tool"] == "human.approve"]
     assert len(approvals) == 1
-    assert approvals[0]["approved_by"] == "rafael" and approvals[0]["error"] is None
+    assert approvals[0]["approved_by"] == "gerente" and approvals[0]["error"] is None
 
     with pytest.raises(InvalidStateError, match="already executed"):
-        actions.approve(out["action_id"], approved_by="rafael")
+        actions.approve(out["action_id"], approved_by="gerente")
 
 
 async def test_pausing_already_paused_item_is_rejected(
@@ -86,7 +86,7 @@ async def test_pausing_already_paused_item_is_rejected(
     first = await propose(
         server, "pause_menu_item", restaurant_id=1, menu_item_id=item, reason="x" * 5
     )
-    actions.approve(first["action_id"], approved_by="rafael")
+    actions.approve(first["action_id"], approved_by="gerente")
     with pytest.raises(ToolError, match="already paused"):
         await scoped_call(
             server,
@@ -111,11 +111,13 @@ async def test_reject_leaves_menu_unchanged(
     out = await propose(
         server, "pause_menu_item", restaurant_id=2, menu_item_id=item, reason="avaliações ruins"
     )
-    decided = actions.reject(out["action_id"], rejected_by="rafael", note="vou falar com a cozinha")
+    decided = actions.reject(
+        out["action_id"], rejected_by="gerente", note="vou falar com a cozinha"
+    )
     assert decided.status == "rejected" and decided.decision_note == "vou falar com a cozinha"
     assert is_active(db, item)
     with pytest.raises(InvalidStateError, match="already rejected"):
-        actions.approve(out["action_id"], approved_by="rafael")
+        actions.approve(out["action_id"], approved_by="gerente")
     # The failed approval is audited too.
     failures = db.execute(
         "SELECT error FROM tool_audit WHERE tool = 'human.approve' "
@@ -142,7 +144,7 @@ async def test_promotion_pending_until_approved(
     assert out["kind"] == "create_promotion" and out["status"] == "pending"
     assert promotions_for(db, out["action_id"]) == []
 
-    decided = actions.approve(out["action_id"], approved_by="rafael")
+    decided = actions.approve(out["action_id"], approved_by="gerente")
     assert decided.status == "executed"
     promos = promotions_for(db, out["action_id"])
     assert len(promos) == 1
@@ -197,7 +199,7 @@ def test_approve_unknown_action(db: Conn) -> None:
     missing = 10**12
     try:
         with pytest.raises(NotFoundError):
-            actions.approve(missing, approved_by="rafael")
+            actions.approve(missing, approved_by="gerente")
     finally:
         db.execute(
             "DELETE FROM tool_audit WHERE tool = 'human.approve' "
@@ -220,7 +222,7 @@ async def test_cli_list_and_approve(
     )
     assert actions.main(["list"]) == 0
     assert f'"action_id": {out["action_id"]}' in capsys.readouterr().out
-    assert actions.main(["approve", str(out["action_id"]), "--by", "rafael"]) == 0
+    assert actions.main(["approve", str(out["action_id"]), "--by", "gerente"]) == 0
     assert not is_active(db, item)
-    assert actions.main(["reject", str(out["action_id"]), "--by", "rafael"]) == 1
+    assert actions.main(["reject", str(out["action_id"]), "--by", "gerente"]) == 1
     assert "already executed" in capsys.readouterr().err

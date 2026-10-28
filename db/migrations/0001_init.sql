@@ -45,7 +45,7 @@ CREATE TABLE reviews (
     rating smallint NOT NULL CHECK (rating BETWEEN 1 AND 5),
     text text NOT NULL,
     created_at timestamptz NOT NULL,
-    -- Embedding dimension will be revisited in Module 4 (RAG).
+    -- Embedding dimension will be revisited when hybrid RAG is implemented.
     embedding vector(1024)
 );
 

@@ -5,7 +5,7 @@
 
 ## Contexto
 
-Frameworks de agentes aceleram protótipos, mas escondem o loop de tool use, a política de retry, o estado da execução e o controle de custo. Este projeto existe para dominar essas peças.
+Frameworks de agentes aceleram protótipos, mas escondem o loop de tool use, a política de retry, o estado da execução e o controle de custo. Neste projeto essas peças são o produto: precisam ser explícitas, testadas e medidas.
 
 ## Opções consideradas
 
@@ -14,7 +14,7 @@ Frameworks de agentes aceleram protótipos, mas escondem o loop de tool use, a p
 
 ## Decisão
 
-_Escreva com suas palavras depois de terminar o Módulo 1._
+_Pendente._
 
 ## Consequências
 

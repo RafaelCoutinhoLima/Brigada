@@ -119,7 +119,7 @@ def get_answerer() -> Answerer:
     Looks for ``answer`` in ``brigada.orchestration`` (the evals harness default,
     ``brigada.orchestration:answer``), then in a ``brigada.orchestration.answer`` submodule.
     Only "not there yet" maps to 501; any other import error (e.g. a broken import *inside* the
-    author's module) propagates as a real 500.
+    orchestrator module) propagates as a real 500.
     """
     package = importlib.import_module(ORCHESTRATOR_PACKAGE)
     fn = getattr(package, "answer", None)
@@ -184,6 +184,6 @@ async def ask(
     )
 
 
-# TODO(module 4): human-approval routes for pending MCP actions go here, delegating to
+# TODO: human-approval routes for pending MCP actions go here, delegating to
 # brigada.mcp_server.actions: list_actions(status="pending"), approve(action_id, approved_by,
 # note=None), reject(action_id, rejected_by, note=None). Not wired yet.

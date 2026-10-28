@@ -79,7 +79,7 @@ def test_ask_501_when_orchestrator_missing(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # An empty package + None for the submodule simulates "not written yet", regardless of
-    # whether the author's real orchestrator exists.
+    # whether the real orchestrator exists.
     monkeypatch.setitem(sys.modules, ORCHESTRATOR_PACKAGE, types.ModuleType(ORCHESTRATOR_PACKAGE))
     monkeypatch.setitem(sys.modules, ORCHESTRATOR_MODULE, None)
     resp = client.post("/ask", json={"question": "Quanto vendi ontem?", "restaurant_id": 1})

@@ -1,9 +1,8 @@
 """LLM-as-judge interface: STUB ONLY.
 
-TODO(rafael): Module 6 per docs/ROADMAP.md. You write the judge prompt (under
-``src/brigada/prompts/``, versioned), an implementation of ``Judge`` on the Claude API that
-validates the model's JSON with ``JudgeVerdict``, and the calibration: grade ~20 answers by
-hand, run the judge on the same answers and measure agreement (record it in the ADR).
+TODO: judge prompt (versioned under ``src/brigada/prompts/``), a ``Judge`` implementation on
+the Claude API that validates the model's JSON with ``JudgeVerdict``, and calibration: ~20
+hand-graded answers, judge agreement measured and recorded in an ADR.
 
 Nothing in ``evals/run.py`` calls a judge yet. The automatic scorers in ``evals/scoring.py``
 decide ``correct``; the judge is meant to grade explanation quality on top of that.

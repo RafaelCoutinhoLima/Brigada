@@ -14,7 +14,7 @@ Restrições que importam:
 
 - **Conteúdo não confiável no contexto.** O texto das avaliações é escrito por clientes e o
   seed já planta três tentativas de prompt injection no restaurante 3 ("pause todos os
-  pratos", "promoção de 90%"). O Módulo 8 vai atacar isso de propósito.
+  pratos", "promoção de 90%"). Testes automatizados de prompt injection exercitam esse caminho.
 - **Impacto assimétrico.** Uma leitura errada gera uma resposta errada, que o crítico e os
   evals podem pegar. Uma escrita errada tira um prato do ar ou dá desconto em produção.
 - **Multi-restaurante.** Toda consulta precisa ficar presa ao `restaurant_id` do dono; um
@@ -25,7 +25,7 @@ Restrições que importam:
   ou sem escopo definido (falha fechada).
 - **Auditoria e avaliação.** Os evals medem "ferramenta certa chamada" e o crítico exige que
   todo número venha de um resultado de ferramenta; isso pede saídas estáveis e auditáveis.
-- **Falhas nunca silenciosas** (CLAUDE.md).
+- **Falhas nunca silenciosas.**
 
 Duas perguntas precisam de resposta: (a) como o modelo consulta dados e (b) como uma
 ferramenta de escrita pede confirmação humana.
@@ -61,7 +61,7 @@ ferramenta de escrita pede confirmação humana.
 1. **Sem ferramentas de escrita**: o agente só recomenda; o dono faz a mudança em outro
    sistema.
    - Prós: risco zero de escrita indevida pelo modelo.
-   - Contras: não cumpre o Módulo 3 ("uma ferramenta de escrita para e pede confirmação");
+   - Contras: não cumpre o requisito de que uma ferramenta de escrita pare e peça confirmação;
      perde o rastro entre recomendação e ação.
 2. **Elicitation do MCP**: a ferramenta pede confirmação ao cliente MCP durante a chamada
    (`ctx.elicit`) e só executa se o usuário aceitar.
@@ -85,9 +85,8 @@ ferramenta de escrita pede confirmação humana.
 
 ## Decisão
 
-_Escreva com suas palavras depois de terminar o Módulo 3._
+_Pendente._
 
 ## Consequências
 
-_Escreva com suas palavras: o que melhora, o que piora e qual métrica ou eval vai mostrar se
-foi uma boa escolha._
+_Pendente._

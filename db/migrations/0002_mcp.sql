@@ -1,4 +1,4 @@
--- Module 3: MCP server tables (pending human-confirmed actions, promotions, tool audit).
+-- MCP server tables (pending human-confirmed actions, promotions, tool audit).
 -- Idempotent: safe to re-apply on an existing volume.
 
 CREATE TABLE IF NOT EXISTS pending_actions (

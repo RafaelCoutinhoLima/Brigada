@@ -4,7 +4,7 @@
 
 Ask a question like *"Why did my sales drop yesterday?"* or *"What do customers complain about in my menu?"*. A planner agent breaks it into steps, specialist agents query real data through an MCP server, a critic agent reviews the answer, and every step is traced with tokens, latency and cost.
 
-> Status: 🚧 in active development. See [ROADMAP](docs/ROADMAP.md).
+> Status: 🚧 in active development.
 
 ## Why from scratch
 
@@ -37,7 +37,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Modules
 
-| # | Module | What it proves |
+| # | Module | Scope |
 |---|--------|----------------|
 | 1 | Agent runtime | Tool-use loop, parallel tool calls, retries, timeouts, step limits, resumable state |
 | 2 | Orchestration | Planner-executor over a dependency graph, critic review |
