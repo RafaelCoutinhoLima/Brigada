@@ -48,8 +48,10 @@ Detalhes:
   ficou sem verificação. Se nenhum passo produziu achado, o erro do especialista sobe (a API
   já sabe mapeá-lo e ele traz o `run_id` para retomar).
 - Com um único passo e nenhum apontamento, o achado é a resposta (sem síntese).
-- O crítico recebe uma lista determinística de "números sem origem" (números da resposta que
-  não aparecem em nenhum achado, aceitando arredondamento) como apoio, não como veredito.
+- O crítico recebe uma lista determinística de "números sem origem" como apoio, não como
+  veredito: números e datas da resposta que não aparecem em nenhum resultado de ferramenta
+  (aceitando arredondamento). A prosa dos especialistas não conta como fonte, e números que
+  só aparecem na pergunta do dono vão numa lista à parte.
 - Reprovado duas vezes: a resposta sai com as ressalvas do crítico anexadas. Nada é
   escondido.
 - Contaminação: um passo começa com escrita desativada se alguma dependência leu avaliações

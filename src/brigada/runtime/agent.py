@@ -74,7 +74,7 @@ class AgentConfig:
     tool_timeout_seconds: float = 15.0
     retry: RetryPolicy = DEFAULT_POLICY
     # Structured output: a successful call to one of these tools ends the run, and its result
-    # becomes the answer. Combined with ``tool_choice={"type": "any"}`` the model must answer
+    # becomes the answer. Combined with a forced ``tool_choice`` the model must answer
     # through the tool, whose executor validates the input (a rejected one goes back as an
     # error for the model to fix).
     terminal_tools: frozenset[str] = frozenset()
