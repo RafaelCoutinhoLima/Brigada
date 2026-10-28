@@ -16,6 +16,12 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run pytest
 
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t brigada:ci .
+
   # Habilitar no Módulo 6: roda 15 casos de eval e falha se a acurácia cair
   # evals:
   #   runs-on: ubuntu-latest
