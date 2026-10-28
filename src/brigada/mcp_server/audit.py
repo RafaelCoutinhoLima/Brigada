@@ -5,6 +5,10 @@
 1. ``_meta["brigada/run_id"]`` on the MCP ``tools/call`` request (how the runtime passes it
    across the stdio process boundary: ``session.call_tool(..., meta={RUN_ID_META_KEY: id})``);
 2. the ``current_run_id`` context variable, for in-process callers (``with run_context(id):``).
+
+``restaurant_id`` scope works the same way (``_meta["brigada/restaurant_id"]`` or
+``restaurant_context(id)``): when bound, the server rejects any call whose ``restaurant_id``
+argument differs, so injected text can't steer the model into another restaurant's data.
 """
 
 from collections.abc import Iterator, Mapping
@@ -17,8 +21,20 @@ from psycopg.types.json import Jsonb
 from brigada.mcp_server.db import Conn, connect
 
 RUN_ID_META_KEY = "brigada/run_id"
+RESTAURANT_ID_META_KEY = "brigada/restaurant_id"
 
 current_run_id: ContextVar[str | None] = ContextVar("brigada_run_id", default=None)
+current_restaurant_id: ContextVar[int | None] = ContextVar("brigada_restaurant_id", default=None)
+
+
+@contextmanager
+def restaurant_context(restaurant_id: int | None) -> Iterator[None]:
+    """Only allow tool calls for ``restaurant_id`` inside the block."""
+    token = current_restaurant_id.set(restaurant_id)
+    try:
+        yield
+    finally:
+        current_restaurant_id.reset(token)
 
 
 @contextmanager

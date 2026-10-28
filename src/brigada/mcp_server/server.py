@@ -121,6 +121,7 @@ class BrigadaMCPServer(MCPServer[Any]):
         run_id = _resolve_run_id(context)
         token = audit.current_run_id.set(run_id)
         try:
+            _check_scope(arguments, _resolve_restaurant_id(context))
             result = await super().call_tool(name, arguments, context)
         except Exception as exc:
             await anyio.to_thread.run_sync(
@@ -147,15 +148,34 @@ class BrigadaMCPServer(MCPServer[Any]):
         return result
 
 
+def _request_meta(context: Context[Any, Any] | None) -> dict[str, Any]:
+    if context is None:
+        return {}
+    try:
+        return dict(context.request_context.meta or {})
+    except ValueError:  # called outside an MCP request (in-process, tests)
+        return {}
+
+
 def _resolve_run_id(context: Context[Any, Any] | None) -> str | None:
-    if context is not None:
-        try:
-            meta = context.request_context.meta
-        except ValueError:  # called outside an MCP request (in-process, tests)
-            meta = None
-        if meta and isinstance(meta.get(audit.RUN_ID_META_KEY), str):
-            return str(meta[audit.RUN_ID_META_KEY])
-    return audit.current_run_id.get()
+    value = _request_meta(context).get(audit.RUN_ID_META_KEY)
+    return str(value) if isinstance(value, str) else audit.current_run_id.get()
+
+
+def _resolve_restaurant_id(context: Context[Any, Any] | None) -> int | None:
+    value = _request_meta(context).get(audit.RESTAURANT_ID_META_KEY)
+    if value is None:
+        return audit.current_restaurant_id.get()
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ToolError(f"{audit.RESTAURANT_ID_META_KEY} must be an integer")
+    return value
+
+
+def _check_scope(arguments: dict[str, Any], scope: int | None) -> None:
+    if scope is not None and arguments.get("restaurant_id") != scope:
+        raise ToolError(
+            f"restaurant_id {arguments.get('restaurant_id')!r} is outside this run's scope"
+        )
 
 
 def build_server() -> BrigadaMCPServer:
