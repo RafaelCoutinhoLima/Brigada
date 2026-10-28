@@ -156,6 +156,7 @@ class RunStore:
             tokens_out=row["tokens_out"],
             cost_usd=Decimal(row["cost_usd"]),
             tools_called=_answered_tool_calls(messages),
+            tool_outputs=_tool_outputs(messages),
         )
         return RunRecord(
             row["id"],
@@ -312,6 +313,20 @@ def _pending(record: RunRecord) -> bool:
         (b if isinstance(b, dict) else b.to_dict()).get("type") == "tool_use"  # type: ignore[union-attr]
         for b in last
     )
+
+
+def _tool_outputs(messages: Sequence[MessageParam]) -> list[str]:
+    """Successful tool results already in the conversation (for ``tool_outputs``)."""
+    outputs: list[str] = []
+    for m in messages:
+        if m["role"] != "user" or isinstance(m["content"], str):
+            continue
+        for b in m["content"]:
+            block: dict[str, Any] = b if isinstance(b, dict) else b.to_dict()  # type: ignore[union-attr]
+            if block.get("type") == "tool_result" and not block.get("is_error"):
+                content = block.get("content")
+                outputs.append(content if isinstance(content, str) else str(content))
+    return outputs
 
 
 def _answered_tool_calls(messages: Sequence[MessageParam]) -> list[ToolCall]:

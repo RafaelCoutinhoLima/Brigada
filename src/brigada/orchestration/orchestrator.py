@@ -63,10 +63,16 @@ class StepOutcome:
     result: RunResult | None = None
     error: BaseException | None = None
     tainted: bool = False  # its finding may carry customer-written text
+    partial: RunResult | None = None  # what a failed step spent and called before failing
 
     @property
     def ok(self) -> bool:
         return self.result is not None
+
+    @property
+    def tool_outputs(self) -> list[str]:
+        run = self.result or self.partial
+        return run.tool_outputs if run else []
 
 
 async def orchestrate(
@@ -213,12 +219,18 @@ class _Orchestration:
         return (await self._role(role, prompt, f"synthesis-{n}")).text
 
     async def _review(self, text: str, n: int) -> Review:
-        sources = [self.question] + [o.result.text for o in self.outcomes.values() if o.result]
-        untraced = untraced_numbers(text, sources)
+        # Ground truth is what the tools returned, never the specialists' prose (a number a
+        # model wrote is not evidence) nor the owner's question (reported separately).
+        tool_outputs = [out for o in self.outcomes.values() for out in o.tool_outputs]
+        untraced = untraced_numbers(text, tool_outputs)
+        asked = set(untraced) - set(untraced_numbers(text, [*tool_outputs, self.question]))
+        untraced = [u for u in untraced if u not in asked]
         prompt = (
-            f"Pergunta do dono: «{self.question}»\n\n{self._findings()}\n\n"
+            f"Pergunta do dono: «{_neutral(self.question)}»\n\n{self._findings()}\n\n"
             f"Resposta final a revisar:\n<resposta>\n{_neutral(text)}\n</resposta>\n\n"
-            f"Números sem origem (checagem automática): {', '.join(untraced) or 'nenhum'}"
+            "Números sem origem em ferramenta (checagem automática): "
+            f"{', '.join(untraced) or 'nenhum'}\n"
+            f"Números que só aparecem na pergunta do dono: {', '.join(sorted(asked)) or 'nenhum'}"
         )
         role = roles.critic(self.client, self.restaurant_id, self.today, frozenset(self.outcomes))
         review = Review.model_validate_json((await self._role(role, prompt, f"review-{n}")).text)
@@ -227,20 +239,25 @@ class _Orchestration:
         return review
 
     async def _role(self, role: roles.Role, prompt: str, plan_step: str) -> RunResult:
-        if self.runs is None:
-            result = await role.agent.run(prompt)
-        else:
-            result = await run_persisted(
-                role.agent,
-                self.runs,
-                uuid.uuid4().hex,
-                restaurant_id=self.restaurant_id,
-                question=prompt,
-                today=self.today,
-                prompt_sha256=role.prompt_sha256,
-                orchestration_id=self.oid,
-                plan_step=plan_step,
-            )
+        try:
+            if self.runs is None:
+                result = await role.agent.run(prompt)
+            else:
+                result = await run_persisted(
+                    role.agent,
+                    self.runs,
+                    uuid.uuid4().hex,
+                    restaurant_id=self.restaurant_id,
+                    question=prompt,
+                    today=self.today,
+                    prompt_sha256=role.prompt_sha256,
+                    orchestration_id=self.oid,
+                    plan_step=plan_step,
+                )
+        except Exception as exc:
+            if (partial := getattr(exc, "partial", None)) is not None:
+                self._add(partial, specialist=False)  # paid for, even if it failed
+            raise
         self._add(result, specialist=False)
         return result
 
@@ -276,7 +293,12 @@ class _Orchestration:
             )
         except Exception as exc:
             logger.warning("step %s (%s) failed: %s", step.id, step.specialist, type(exc).__name__)
-            return StepOutcome(step, run_id, error=exc, tainted=tainted)
+            partial = getattr(exc, "partial", None)
+            if partial is not None:
+                # Its cost is real and its tool calls happened (a write may have been proposed):
+                # both must reach the totals that the API reports and the evals score.
+                self._add(partial, specialist=True)
+            return StepOutcome(step, run_id, error=exc, tainted=tainted, partial=partial)
         self._add(result, specialist=True)
         read_reviews = any(c.name in UNTRUSTED_OUTPUT_TOOLS for c in result.tools_called)
         return StepOutcome(step, run_id, result=result, tainted=tainted or read_reviews)
@@ -324,8 +346,9 @@ def _findings_block(outcomes: list[StepOutcome]) -> str:
 
 
 def _neutral(text: str) -> str:
-    """Keep a finding from closing its own tag and posing as orchestrator text."""
-    return text.replace("</achado", "</ achado").replace("</resposta", "</ resposta")
+    """Keep text from opening or closing any tag (any case, spacing or name) and posing as
+    orchestrator structure: angle brackets become look-alike characters."""
+    return text.replace("<", "‹").replace(">", "›")
 
 
 __all__ = [

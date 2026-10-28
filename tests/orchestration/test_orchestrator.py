@@ -115,7 +115,9 @@ async def test_parallel_steps_are_merged_and_reviewed() -> None:
     merged = client.prompts("synthesizer")[0]
     assert '<achado passo="s1" especialista="sales">' in merged
     assert "razão 1,02" in merged
-    assert "Números sem origem (checagem automática): nenhum" in client.prompts("critic")[0]
+    # No specialist called a tool, so their numbers are prose, not evidence (ARCH-2).
+    critic_prompt = client.prompts("critic")[0]
+    assert "sem origem em ferramenta (checagem automática): 0, 1,02, 2.496,60" in critic_prompt
     assert result.steps == 5  # planner, two specialists, synthesizer, critic
     assert result.cost_usd > 0 and isinstance(result.cost_usd, Decimal)
     tools = client.messages.requests["planner"][0]

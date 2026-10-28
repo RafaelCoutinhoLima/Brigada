@@ -109,6 +109,17 @@ class Agent:
         resuming a run that failed, e.g. with ``MaxStepsExceeded``); otherwise the budget
         counts from the start of the conversation.
         """
+        try:
+            return await self._resume(messages, result, fresh_budget)
+        except Exception as exc:
+            # Tokens were paid and tools may have run (a write proposed) before the failure:
+            # the caller needs them for cost totals and for security scoring.
+            exc.partial = result  # type: ignore[attr-defined]
+            raise
+
+    async def _resume(
+        self, messages: list[MessageParam], result: RunResult, fresh_budget: bool
+    ) -> RunResult:
         limit = result.steps + self.config.max_steps if fresh_budget else self.config.max_steps
         if not messages:
             raise ValueError("cannot resume an empty conversation")
@@ -203,6 +214,9 @@ class Agent:
         )
         await self.observer.on_tool_results(result.steps, outcomes, messages)
         terminal = {c.id for c in calls if c.name in self.config.terminal_tools}
+        result.tool_outputs.extend(
+            o.content for o in outcomes if not o.is_error and o.tool_use_id not in terminal
+        )
         return next(
             (o.content for o in outcomes if o.tool_use_id in terminal and not o.is_error), None
         )

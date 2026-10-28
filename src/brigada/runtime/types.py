@@ -34,15 +34,21 @@ class RunResult:
     cost_usd: Decimal = Decimal(0)
     tools_called: list[ToolCall] = field(default_factory=list)
     run_id: str | None = None
+    # What the tools returned (successful results only): the ground truth a reviewer can
+    # check the answer's numbers against, as opposed to the model's own prose.
+    tool_outputs: list[str] = field(default_factory=list)
 
 
 class AgentError(RuntimeError):
     """Base class: every way a run can end without a valid answer.
 
     ``run_id`` is filled in when the run was persisted, so the caller can resume it.
+    ``partial`` (set on any exception leaving ``Agent.resume``) is what the run had spent and
+    called before failing, so totals and security checks do not lose it.
     """
 
     run_id: str | None = None
+    partial: "RunResult | None" = None
 
 
 class MaxStepsExceeded(AgentError):

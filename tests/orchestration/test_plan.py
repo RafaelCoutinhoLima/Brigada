@@ -77,3 +77,26 @@ def test_untraced_numbers_accept_rounding() -> None:
     sources = ['{"total_revenue": 2496.6, "average_ticket": 132.857}', "terças: 6120.4"]
     assert untraced_numbers("R$ 2.496,60 contra R$ 6.120,40; ticket R$ 132,86", sources) == []
     assert untraced_numbers("Você vendeu R$ 9.999,00 com 41 pedidos", sources) == ["41", "9.999,00"]
+
+
+def test_pt_br_thousands_in_the_answer_are_not_small_numbers() -> None:
+    sources = ["Terça: 5 pedidos no app, nota média 2,5."]
+    assert untraced_numbers("Faturamento de R$ 5.000 na terça", sources) == ["5.000"]
+    assert untraced_numbers("R$ 2.500 de receita", sources) == ["2.500"]
+    assert untraced_numbers("5 pedidos, nota 2,5", sources) == []
+
+
+def test_dates_must_come_from_a_source() -> None:
+    sources = ['{"start_date": "2026-10-27"}']
+    assert untraced_numbers("Queda em 27/10", sources) == []
+    assert untraced_numbers("Queda em 2026-10-21", sources) == ["2026-10-21"]
+    assert untraced_numbers("Cancelaram 3/4 dos pedidos", sources) == ["3/4"]
+    assert untraced_numbers("razão 12/40", ["12 e 40"]) == []  # not a date: two numbers
+
+
+def test_huge_digit_runs_do_not_crash() -> None:
+    boleto = "23793381286000782713695000063305975520000370000"
+    assert (
+        untraced_numbers("ok, 1 pedido", ["pedido 123456789012345678901234567", boleto, "1"]) == []
+    )
+    assert untraced_numbers(f"boleto {boleto}", ["1"]) == [boleto]

@@ -11,9 +11,10 @@ def _clean_audit_rows(request: pytest.FixtureRequest) -> Iterator[None]:
     if request.node.get_closest_marker("db") is None or "DATABASE_URL" not in os.environ:
         yield
         return
+    tables = ("tool_audit", "pending_actions")
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-        row = conn.execute("SELECT coalesce(max(id), 0) FROM tool_audit").fetchone()
-    last_id = row[0] if row else 0
+        last = {t: conn.execute(f"SELECT coalesce(max(id), 0) FROM {t}").fetchone() for t in tables}
     yield
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-        conn.execute("DELETE FROM tool_audit WHERE id > %s", (last_id,))
+        for t, row in last.items():
+            conn.execute(f"DELETE FROM {t} WHERE id > %s", (row[0] if row else 0,))
