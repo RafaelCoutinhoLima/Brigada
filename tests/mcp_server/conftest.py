@@ -75,7 +75,9 @@ async def scoped_call(
     server: BrigadaMCPServer, name: str, arguments: dict[str, Any]
 ) -> CallToolResult | InputRequiredResult:
     """Call a tool the way the runtime will: scoped to the restaurant in the arguments."""
-    with restaurant_context(arguments.get("restaurant_id")):
+    rid = arguments.get("restaurant_id")
+    # Like the real runtime, the scope is always a trusted int (here: the one asked for, or 1).
+    with restaurant_context(rid if type(rid) is int else 1):
         return await server.call_tool(name, arguments)
 
 

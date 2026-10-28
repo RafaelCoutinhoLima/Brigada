@@ -24,6 +24,7 @@ from brigada.mcp_server.db import Conn, connect
 
 RUN_ID_META_KEY = "brigada/run_id"
 RESTAURANT_ID_META_KEY = "brigada/restaurant_id"
+TOOL_USE_ID_META_KEY = "brigada/tool_use_id"
 
 current_run_id: ContextVar[str | None] = ContextVar("brigada_run_id", default=None)
 current_restaurant_id: ContextVar[int | None] = ContextVar("brigada_restaurant_id", default=None)
@@ -58,6 +59,8 @@ def record(
     error: str | None = None,
     run_id: str | None = None,
     approved_by: str | None = None,
+    restaurant_id: int | None = None,
+    tool_use_id: str | None = None,
 ) -> int:
     """Insert an audit row on ``conn``; the caller owns the transaction.
 
@@ -66,8 +69,8 @@ def record(
     call with no trace).
     """
     row = conn.execute(
-        "INSERT INTO tool_audit (run_id, tool, args, result, error, approved_by) "
-        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        "INSERT INTO tool_audit (run_id, tool, args, result, error, approved_by, "
+        "restaurant_id, tool_use_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
         (
             storable(run_id),
             storable(tool),
@@ -75,6 +78,13 @@ def record(
             Jsonb(storable(result)) if result is not None else None,
             storable(error),
             storable(approved_by),
+            # Only a real int fits the column; anything else must not make the audit fail.
+            restaurant_id
+            if isinstance(restaurant_id, int)
+            and not isinstance(restaurant_id, bool)
+            and -(2**31) <= restaurant_id < 2**31
+            else None,
+            storable(tool_use_id),
         ),
     ).fetchone()
     assert row is not None

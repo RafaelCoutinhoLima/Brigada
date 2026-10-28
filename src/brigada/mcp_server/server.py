@@ -128,14 +128,22 @@ class BrigadaMCPServer(MCPServer[Any]):
         self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
     ) -> CallToolResult | InputRequiredResult:
         run_id = _resolve_run_id(context)
+        meta = _request_meta(context)
+        tool_use_id = meta.get(audit.TOOL_USE_ID_META_KEY)
+        where: dict[str, Any] = {
+            "run_id": run_id,
+            "tool_use_id": tool_use_id if isinstance(tool_use_id, str) else None,
+            "restaurant_id": None,
+        }
         token = audit.current_run_id.set(run_id)
         try:
             _reject_nul(name, arguments)
-            _check_scope(arguments, _resolve_restaurant_id(context))
+            where["restaurant_id"] = scope = _resolve_restaurant_id(context)
+            _check_scope(arguments, scope)
             result = await super().call_tool(name, arguments, context)
         except Exception as exc:
             try:
-                await _audit(tool=name, args=arguments, error=_error_text(exc), run_id=run_id)
+                await _audit(tool=name, args=arguments, error=_error_text(exc), **where)
             except Exception:
                 # Never let a failed audit replace the real error the caller must see.
                 logger.exception("audit write failed for failed call to %r", name)
@@ -143,7 +151,7 @@ class BrigadaMCPServer(MCPServer[Any]):
         finally:
             audit.current_run_id.reset(token)
         try:
-            await _audit(tool=name, args=arguments, result=_audit_result(result), run_id=run_id)
+            await _audit(tool=name, args=arguments, result=_audit_result(result), **where)
         except Exception:
             # Fail closed: a result we could not audit is not handed out.
             logger.exception("audit write failed for call to %r", name)
@@ -202,7 +210,10 @@ def _check_scope(arguments: dict[str, Any], scope: int | None) -> None:
         raise ToolError(
             f"no restaurant scope bound for this run: pass _meta[{audit.RESTAURANT_ID_META_KEY!r}]"
         )
-    if arguments["restaurant_id"] != scope:
+    if type(scope) is not int:  # bool is an int subclass and True == 1: compare exact types
+        raise ToolError(f"invalid restaurant scope {scope!r}")
+    rid = arguments["restaurant_id"]
+    if type(rid) is not int or rid != scope:
         raise ToolError(
             f"restaurant_id {arguments.get('restaurant_id')!r} is outside this run's scope"
         )

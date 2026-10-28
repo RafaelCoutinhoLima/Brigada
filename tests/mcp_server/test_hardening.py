@@ -86,3 +86,40 @@ async def test_unaudited_success_is_not_handed_out(
     )
     with pytest.raises(ToolError, match="could not be audited"):
         await scoped_call(server, "list_menu_items", {"restaurant_id": 1})
+
+
+async def test_audit_records_trusted_restaurant_and_tool_use_id(db: Conn, run_id: str) -> None:
+    from mcp import Client
+
+    from brigada.mcp_server.audit import (
+        RESTAURANT_ID_META_KEY,
+        RUN_ID_META_KEY,
+        TOOL_USE_ID_META_KEY,
+    )
+    from brigada.mcp_server.server import build_server
+
+    meta = {RUN_ID_META_KEY: run_id, RESTAURANT_ID_META_KEY: 1, TOOL_USE_ID_META_KEY: "toolu_9"}
+    async with Client(build_server()) as client:
+        await client.call_tool("list_menu_items", {"restaurant_id": 1}, meta=meta)
+        await client.call_tool("list_menu_items", {"restaurant_id": 2}, meta=meta)  # out of scope
+    rows = db.execute(
+        "SELECT restaurant_id, tool_use_id, error FROM tool_audit WHERE run_id = %s ORDER BY id",
+        (run_id,),
+    ).fetchall()
+    assert [(r["restaurant_id"], r["tool_use_id"]) for r in rows] == [
+        (1, "toolu_9"),
+        (1, "toolu_9"),
+    ]
+    assert rows[0]["error"] is None and "scope" in rows[1]["error"]
+
+
+@pytest.mark.parametrize("scope", ["um", True, 2**40])
+async def test_odd_scope_values_never_break_the_audit(
+    server: BrigadaMCPServer, db: Conn, run_id: str, scope: object
+) -> None:
+    from brigada.mcp_server.audit import restaurant_context
+
+    with restaurant_context(scope), pytest.raises(ToolError):  # type: ignore[arg-type]
+        await server.call_tool("list_menu_items", {"restaurant_id": 1})
+    [row] = audit_rows(db, run_id)
+    assert row["error"] is not None

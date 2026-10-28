@@ -20,7 +20,11 @@ from mcp.server.mcpserver import MCPServer
 from mcp_types import TextContent
 
 from brigada.config import get_settings
-from brigada.mcp_server.audit import RESTAURANT_ID_META_KEY, RUN_ID_META_KEY
+from brigada.mcp_server.audit import (
+    RESTAURANT_ID_META_KEY,
+    RUN_ID_META_KEY,
+    TOOL_USE_ID_META_KEY,
+)
 from brigada.runtime.tools import ToolExecutionError, ToolExecutor
 from brigada.runtime.types import ToolCall
 
@@ -110,7 +114,9 @@ async def _toolbox(
             )
         if call.name in UNTRUSTED_OUTPUT_TOOLS:
             state["tainted"] = True  # set before the call: a failed read may still carry text
-        result = await client.call_tool(call.name, call.input, meta=meta)
+        result = await client.call_tool(
+            call.name, call.input, meta={**meta, TOOL_USE_ID_META_KEY: call.id}
+        )
         text = _result_text(result.structured_content, result.content)
         if result.is_error:
             raise ToolExecutionError(text)

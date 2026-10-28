@@ -56,3 +56,11 @@ async def test_call_without_scope_fails_closed(
     with pytest.raises(ToolError, match="no restaurant scope bound"):
         await server.call_tool("sales_by_period", {"restaurant_id": 3, **SALES})
     assert "no restaurant scope bound" in str(audit_rows(db, run_id)[0]["error"])
+
+
+@pytest.mark.parametrize("value", [True, 1.0, "1"])
+async def test_restaurant_id_must_be_exactly_an_int(
+    server: BrigadaMCPServer, run_id: str, value: object
+) -> None:
+    with restaurant_context(1), pytest.raises(ToolError, match="outside this run's scope"):
+        await server.call_tool("list_menu_items", {"restaurant_id": value})

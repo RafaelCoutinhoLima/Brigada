@@ -115,6 +115,7 @@ def _decide(
                 result={"action": decided.model_dump(mode="json"), "effect": effect},
                 run_id=action.run_id,
                 approved_by=actor,
+                restaurant_id=action.restaurant_id,
             )
             return decided
     except Exception as exc:

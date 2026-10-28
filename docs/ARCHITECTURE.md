@@ -51,4 +51,12 @@ promotions(id, restaurant_id, menu_item_id, discount_pct, start_date, end_date, 
 
 - Untrusted input: user question and retrieved review text.
 - Highest-impact action: write tools that change the menu or create promotions.
-- Defenses: data/instruction separation, write tools gated by human confirmation, write tools disabled when untrusted content is in context, automated injection tests.
+- Defenses:
+  - data/instruction separation: review text is returned as `untrusted_text`, and prompts state that tool results are data;
+  - least privilege per agent: each specialist only sees its own tools (Sales has no write tools);
+  - per-run restaurant scope, fail closed: the MCP server rejects any call without a bound scope or for another restaurant;
+  - write tools only create pending actions; execution happens on a human path that is not an MCP tool;
+  - once a run has read untrusted text, its write tools are disabled (also after a resume);
+  - every call is audited, including rejected ones, with the trusted restaurant and `tool_use_id`; audit writes cannot fail on content;
+  - database and internal errors never reach the model or the HTTP client; they are logged server-side;
+  - automated attack tests (NUL bytes, scope types, SQL injection, cross-restaurant reads) run in CI.
