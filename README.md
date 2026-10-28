@@ -52,12 +52,14 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 _Filled in as modules ship._
 
+<!-- results:start -->
 | Metric | Value |
 |--------|-------|
 | Eval accuracy | – |
 | p50 latency | – |
 | Cost per question | – |
 | Router savings vs always-strong | – |
+<!-- results:end -->
 
 ## Stack
 
