@@ -229,6 +229,8 @@ class DeliveryGroup(_Output):
     mean_promised_minutes: float
     mean_actual_minutes: float
     ratio: float = Field(description="mean_actual_minutes / mean_promised_minutes.")
+    late_deliveries: int = Field(description="Deliveries where actual > promised minutes.")
+    late_share: float = Field(description="late_deliveries / deliveries, 0..1.")
 
 
 class DeliveryTimesResult(_Output):

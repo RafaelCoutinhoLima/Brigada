@@ -310,7 +310,8 @@ def delivery_times(conn: Conn, inp: DeliveryTimesInput) -> DeliveryTimesResult:
     select, group = _DELIVERY_SELECT[inp.group_by]
     query = sql.SQL(
         "SELECT {select}, count(*) AS n, avg(d.promised_minutes) AS promised, "
-        "       avg(d.actual_minutes) AS actual "
+        "       avg(d.actual_minutes) AS actual, "
+        "       count(*) FILTER (WHERE d.actual_minutes > d.promised_minutes) AS late "
         "FROM deliveries d JOIN orders o ON o.id = d.order_id "
         "WHERE o.restaurant_id = %(rid)s AND o.created_at >= %(lo)s AND o.created_at < %(hi)s "
         "{group}"
@@ -327,6 +328,8 @@ def delivery_times(conn: Conn, inp: DeliveryTimesInput) -> DeliveryTimesResult:
             mean_promised_minutes=round(float(r["promised"]), 2),
             mean_actual_minutes=round(float(r["actual"]), 2),
             ratio=round(float(r["actual"]) / float(r["promised"]), 3),
+            late_deliveries=r["late"],
+            late_share=round(r["late"] / r["n"], 4),
         )
         for r in rows
         if r["n"] > 0  # "none" with no deliveries returns one row of NULL averages
