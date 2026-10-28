@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from brigada.api.auth import get_allowed_restaurants, require_restaurant
 from brigada.config import Settings, get_settings
 from brigada.orchestration import orchestrate
+from brigada.orchestration.orchestrator import MAX_EXTRA_ROUNDS
 from brigada.orchestration.store import OrchestrationStore
 from brigada.runtime import specialists
 from brigada.runtime.state import RunStore
@@ -37,8 +38,14 @@ PREVIEW_CHARS = 400
 AgentName = Literal["sales", "menu", "operations"]
 
 # Background runs started from the console. Kept here so they are not garbage-collected
-# mid-flight; each run records its own success or failure in `runs`.
-_tasks: set[asyncio.Task[Any]] = set()
+# mid-flight; each run records its own success or failure in `runs`. Each task carries
+# (restaurant_id, weight): dispatch returns at once, so without a cap one key could pile up
+# unbounded work (model calls, MCP processes) for every tenant. An orchestration weighs more
+# because it fans out to several specialists.
+_tasks: dict[asyncio.Task[Any], tuple[int, int]] = {}
+MAX_IN_FLIGHT = 12
+MAX_IN_FLIGHT_PER_RESTAURANT = 4
+ORCHESTRATION_WEIGHT = 3
 
 
 class DispatchRequest(BaseModel):
@@ -236,6 +243,8 @@ async def console_dispatch(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ANTHROPIC_API_KEY is not configured on the server",
         )
+    agents = list(dict.fromkeys(body.agents))  # dedupe, keep order
+    _reserve(body.restaurant_id, ORCHESTRATION_WEIGHT if body.orchestrate else len(agents))
     today = body.today or datetime.now(ZoneInfo(settings.timezone)).date()
     store = RunStore(settings.database_url)
     if body.orchestrate:
@@ -250,10 +259,12 @@ async def console_dispatch(
                 orchestration_id=oid,
             ),
             f"console:orchestrator:{oid}",
+            body.restaurant_id,
+            ORCHESTRATION_WEIGHT,
         )
         return DispatchResponse(runs=[], orchestration_id=oid)
     dispatched: list[DispatchedRun] = []
-    for name in dict.fromkeys(body.agents):  # dedupe, keep order
+    for name in agents:
         run_id = uuid.uuid4().hex
         _start(
             specialists.ask(
@@ -265,19 +276,38 @@ async def console_dispatch(
                 store=store,
             ),
             f"console:{name}:{run_id}",
+            body.restaurant_id,
+            1,
         )
         dispatched.append(DispatchedRun(agent=name, run_id=run_id))
     return DispatchResponse(runs=dispatched)
 
 
-def _start(work: Coroutine[Any, Any, Any], name: str) -> None:
+def _reserve(restaurant_id: int, weight: int) -> None:
+    total = sum(w for _, w in _tasks.values())
+    mine = sum(w for rid, w in _tasks.values() if rid == restaurant_id)
+    if total + weight > MAX_IN_FLIGHT or mine + weight > MAX_IN_FLIGHT_PER_RESTAURANT:
+        logger.warning(
+            "console dispatch refused: restaurant %s in flight=%d, total=%d",
+            restaurant_id,
+            mine,
+            total,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many runs in progress; wait for them to finish",
+            headers={"Retry-After": "10"},
+        )
+
+
+def _start(work: Coroutine[Any, Any, Any], name: str, restaurant_id: int, weight: int) -> None:
     task = asyncio.create_task(work, name=name)
-    _tasks.add(task)
+    _tasks[task] = (restaurant_id, weight)
     task.add_done_callback(_finished)
 
 
 def _finished(task: asyncio.Task[Any]) -> None:
-    _tasks.discard(task)
+    _tasks.pop(task, None)
     if not task.cancelled() and (exc := task.exception()) is not None:
         logger.warning("console run %s failed: %s", task.get_name(), type(exc).__name__)
 
@@ -328,8 +358,10 @@ def _orchestration_view(o: dict[str, Any], runs: list[dict[str, Any]]) -> Orches
     by_step = {r["plan_step"]: r for r in runs}  # a later run of the same step wins
     plan = o["plan"] or {}
     reviews: list[dict[str, Any]] = o["review"] or []
+    # Only the first review's extra steps ever run (one extra round): a later review's
+    # requests would show up as steps that never existed.
     planned = [(st, False) for st in plan.get("steps", [])] + [
-        (st, True) for rv in reviews for st in rv.get("extra_steps", [])
+        (st, True) for rv in reviews[:MAX_EXTRA_ROUNDS] for st in rv.get("extra_steps", [])
     ]
     finished = o["status"] != "running"
     steps = []

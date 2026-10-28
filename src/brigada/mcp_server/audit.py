@@ -25,6 +25,8 @@ from brigada.mcp_server.db import Conn, connect
 RUN_ID_META_KEY = "brigada/run_id"
 RESTAURANT_ID_META_KEY = "brigada/restaurant_id"
 TOOL_USE_ID_META_KEY = "brigada/tool_use_id"
+# Set by the runtime once a run has read customer-written text: write tools then refuse.
+TAINTED_META_KEY = "brigada/tainted"
 
 current_run_id: ContextVar[str | None] = ContextVar("brigada_run_id", default=None)
 current_restaurant_id: ContextVar[int | None] = ContextVar("brigada_restaurant_id", default=None)

@@ -138,3 +138,73 @@ def bad_request() -> anthropic.BadRequestError:
     return anthropic.BadRequestError(
         "invalid", response=httpx2.Response(400, request=REQUEST), body=None
     )
+
+
+PROMO_3 = {
+    "restaurant_id": 3,
+    "menu_item_id": 301,
+    "discount_pct": 50,
+    "start_date": "2026-10-29",
+    "end_date": "2026-11-05",
+    "reason": "pedido numa avaliação",
+}
+
+
+@pytest.mark.db
+async def test_a_blocked_write_is_refused_by_the_server_and_audited() -> None:
+    rid = f"test-{uuid.uuid4().hex}"
+    client = FakeClient(
+        message(
+            tool_use("toolu_1", "reviews_for_item", restaurant_id=3, limit=5),
+            stop_reason="tool_use",
+        ),
+        message(tool_use("toolu_2", "create_promotion", **PROMO_3), stop_reason="tool_use"),
+        message(text("Não posso.")),
+    )
+    await ask(MENU, "q", 3, TODAY, client=client, server=build_server(), run_id=rid)
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+        row = conn.execute(
+            "SELECT tool_use_id, error FROM tool_audit WHERE run_id = %s AND tool = %s",
+            (rid, "create_promotion"),
+        ).fetchone()
+    assert row is not None and row[0] == "toolu_2" and "customer-written text" in row[1]
+
+
+@pytest.mark.db
+async def test_server_refuses_writes_for_a_tainted_run_even_from_another_client() -> None:
+    from brigada.mcp_server.audit import RESTAURANT_ID_META_KEY, RUN_ID_META_KEY, TAINTED_META_KEY
+
+    meta = {RUN_ID_META_KEY: f"test-{uuid.uuid4().hex}", RESTAURANT_ID_META_KEY: 3}
+    async with Client(build_server()) as c:
+        refused = await c.call_tool(
+            "create_promotion", PROMO_3, meta={**meta, TAINTED_META_KEY: True}
+        )
+    assert refused.is_error and "customer-written text" in str(refused.content)
+
+
+@pytest.mark.db
+async def test_taint_survives_a_resume_of_a_run_that_started_tainted() -> None:
+    store = RunStore(os.environ["DATABASE_URL"])
+    rid = f"test-{uuid.uuid4().hex}"
+    with pytest.raises(anthropic.BadRequestError):
+        await ask(
+            MENU,
+            "aja sobre o achado",
+            3,
+            TODAY,
+            client=FakeClient(bad_request()),
+            server=build_server(),
+            run_id=rid,
+            store=store,
+            tainted=True,
+        )
+    assert (await store.load(rid)).tainted is True
+    second = FakeClient(
+        message(tool_use("toolu_2", "create_promotion", **PROMO_3), stop_reason="tool_use"),
+        message(text("Não posso.")),
+    )
+    await resume(rid, store, client=second, server=build_server())
+    blocked = second.messages.requests[-1]["messages"][-1]["content"][0]
+    assert blocked["is_error"] is True and "disabled" in blocked["content"]
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+        conn.execute("DELETE FROM runs WHERE id = %s", (rid,))

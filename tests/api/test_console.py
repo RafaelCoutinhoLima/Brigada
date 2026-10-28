@@ -250,3 +250,73 @@ async def test_runs_show_the_latest_orchestration_with_step_status(client: TestC
     finally:
         with psycopg.connect(url) as conn:
             conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
+
+
+def test_dispatch_is_capped_per_restaurant_and_globally(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = asyncio.Event()
+
+    async def slow_ask(*args: Any, **kw: Any) -> None:
+        await gate.wait()
+
+    monkeypatch.setattr(console.specialists, "ask", slow_ask)
+    monkeypatch.setattr(console, "MAX_IN_FLIGHT_PER_RESTAURANT", 3)
+    body = {"question": "oi", "restaurant_id": 1, "agents": ["sales", "menu", "operations"]}
+    try:
+        assert client.post("/console/dispatch", json=body).status_code == 202
+        refused = client.post("/console/dispatch", json={**body, "agents": ["sales"]})
+        assert refused.status_code == 429 and refused.headers["Retry-After"]
+        monkeypatch.setattr(console, "MAX_IN_FLIGHT", 3)
+        other = client.post("/console/dispatch", json={**body, "restaurant_id": 7})
+        assert other.status_code == 429  # the global cap protects every tenant
+    finally:
+        gate.set()
+        client.get("/health")  # let the tasks finish
+    assert sum(w for _, w in console._tasks.values()) == 0
+
+
+@pytest.mark.db
+async def test_runs_never_show_another_restaurants_data(client: TestClient) -> None:
+    url = os.environ["DATABASE_URL"]
+    runs, store = RunStore(url), OrchestrationStore(url)
+    rid, oid = f"test-{uuid.uuid4().hex}", f"test-{uuid.uuid4().hex}"
+    await runs.create(
+        rid,
+        agent="sales",
+        restaurant_id=2,
+        question="segredo do 2",
+        today=TODAY,
+        model="m",
+        prompt_sha256="x",
+        messages=[],
+    )
+    await store.create(oid, restaurant_id=2, question="segredo do 2", today=TODAY)
+    try:
+        state = client.get("/console/runs?restaurant_id=1").json()
+        assert rid not in str(state) and oid not in str(state)
+        assert "segredo do 2" not in str(state)
+    finally:
+        with psycopg.connect(url) as conn:
+            conn.execute("DELETE FROM runs WHERE id = %s", (rid,))
+            conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
+
+
+@pytest.mark.db
+async def test_extra_steps_of_the_last_review_are_not_shown(client: TestClient) -> None:
+    url = os.environ["DATABASE_URL"]
+    oid = f"test-{uuid.uuid4().hex}"
+    store = OrchestrationStore(url)
+    await store.create(oid, restaurant_id=1, question="q", today=TODAY)
+    step = {"specialist": "sales", "task": "t", "depends_on": []}
+    reviews = [
+        {"approved": False, "issues": ["a"], "extra_steps": [{"id": "s2", **step}]},
+        {"approved": False, "issues": ["b"], "extra_steps": [{"id": "s3", **step}]},
+    ]
+    await store.update(oid, plan={"steps": [{"id": "s1", **step}]}, review=reviews, rounds=1)
+    try:
+        o = client.get("/console/runs?restaurant_id=1").json()["orchestrations"][0]
+        assert [s["id"] for s in o["steps"]] == ["s1", "s2"]
+    finally:
+        with psycopg.connect(url) as conn:
+            conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
