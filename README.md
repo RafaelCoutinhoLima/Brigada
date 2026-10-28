@@ -4,7 +4,7 @@
 
 Ask a question like *"Why did my sales drop yesterday?"* or *"What do customers complain about in my menu?"*. A planner agent breaks it into steps, specialist agents query real data through an MCP server, a critic agent reviews the answer, and every step is traced with tokens, latency and cost.
 
-> Status: 🚧 in active development.
+> Status: 🚧 in active development. Runtime, MCP server, orchestration and the live console are in; RAG, router and the injection test suite are next.
 
 ## Why from scratch
 
@@ -74,9 +74,18 @@ uv sync
 uv run python scripts/seed_data.py --reset
 uv run pytest                 # add -m db to run tests against the database
 
-# ask the Sales agent (needs ANTHROPIC_API_KEY); every step is saved in `runs`/`steps`
+# ask a specialist (needs ANTHROPIC_API_KEY); every step is saved in `runs`/`steps`
 uv run python -m brigada.runtime "Quanto vendi ontem?" --restaurant 1 --today 2026-10-28
+uv run python -m brigada.runtime "Qual prato tem mais reclamações?" --agent menu --restaurant 2
+uv run python -m brigada.runtime "Onde as entregas atrasam?" --agent operations --restaurant 3
 uv run python -m brigada.runtime --resume <run_id>   # continue a run that failed
+
+# ask the orchestrator: planner -> specialists in parallel -> synthesis -> critic
+uv run python -m brigada.orchestration "Por que minhas vendas caíram na última terça?" --restaurant 1 --today 2026-10-28
+
+# live console: the orchestrator's plan and review plus one pane per agent, updated every second; dispatch questions from the prompt
+uv run uvicorn brigada.api.main:app   # then open http://localhost:8000/console (needs API_KEYS)
+# http://localhost:8000/console?demo  -> simulated runs, no server data or API cost
 ```
 
 ## Data

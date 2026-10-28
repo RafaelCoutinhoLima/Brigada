@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brigada Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=VT323&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #030805;
+    --panel: #050f08;
+    --line: #0f3a1c;
+    --green: #39ff7a;
+    --green-dim: #1f9c4a;
+    --green-faint: #0d4a22;
+    --amber: #ffb000;
+    --cyan: #3ce0ff;
+    --red: #ff3b5c;
+    --text: #b8ffcf;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    --display: "VT323", var(--mono);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 var(--mono); overflow: hidden;
+  }
+  /* CRT: scanlines + vignette + faint flicker */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.28) 0 1px, transparent 1px 3px);
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 51;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.65) 100%);
+    animation: flicker 6s infinite steps(1);
+  }
+  @keyframes flicker { 0%, 100% { opacity: 1; } 47% { opacity: .92; } 48% { opacity: 1; } }
+
+  .app { display: grid; grid-template-rows: auto auto auto 1fr auto auto; height: 100vh; gap: 10px; padding: 12px 16px; }
+  .glow { text-shadow: 0 0 6px rgba(57,255,122,.55); }
+
+  header { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .logo { font: 30px/1 var(--display); color: var(--green); letter-spacing: 2px; }
+  .logo span { color: var(--amber); }
+  .stat { color: var(--green-dim); white-space: nowrap; }
+  .stat b { color: var(--green); font-weight: 600; }
+  .spacer { flex: 1; }
+  .led { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 0; background: var(--green-faint); }
+  .led.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .led.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .led.err { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  .config { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; color: var(--green-dim); }
+  .config label { display: flex; gap: 6px; align-items: center; }
+  input, button { font: inherit; color: var(--green); background: #020503; border: 1px solid var(--line); padding: 4px 8px; outline: none; }
+  input:focus { border-color: var(--green-dim); box-shadow: 0 0 0 1px var(--green-faint); }
+  input[type=number] { width: 64px; }
+  button { cursor: pointer; text-transform: uppercase; letter-spacing: 1px; }
+  button:hover { background: var(--green-faint); }
+  button.active { color: var(--bg); background: var(--green); }
+
+  .panes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; min-height: 0; }
+  .pane { display: grid; grid-template-rows: auto auto 1fr auto; border: 1px solid var(--line); background: var(--panel); min-height: 0; position: relative; }
+  .pane.running { border-color: var(--green-dim); box-shadow: 0 0 18px rgba(57,255,122,.12) inset; }
+  .pane.failed { border-color: #5a1422; }
+  .pane-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  .pane-title { font: 24px/1 var(--display); color: var(--green); letter-spacing: 2px; }
+  .badge { font-size: 11px; padding: 1px 6px; border: 1px solid currentColor; letter-spacing: 1px; }
+  .badge.idle { color: var(--green-dim); }
+  .badge.running { color: var(--amber); animation: blink 1s steps(2) infinite; }
+  .badge.succeeded { color: var(--green); }
+  .badge.failed { color: var(--red); }
+  @keyframes blink { 50% { opacity: .25; } }
+  .pane-tools { padding: 4px 10px; color: var(--green-dim); font-size: 11px; border-bottom: 1px dashed var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log { overflow-y: auto; padding: 8px 10px; min-height: 0; scrollbar-color: var(--green-faint) transparent; }
+  .log::-webkit-scrollbar { width: 6px; } .log::-webkit-scrollbar-thumb { background: var(--green-faint); }
+  .line { white-space: pre-wrap; word-break: break-word; margin: 0 0 4px; }
+  .line .t { color: var(--green-faint); margin-right: 6px; }
+  .line.q { color: var(--amber); }
+  .line.call { color: var(--cyan); }
+  .line.result { color: var(--green-dim); }
+  .line.result.err { color: var(--red); }
+  .line.text { color: var(--text); }
+  .line.answer { color: var(--green); border-left: 2px solid var(--green); padding-left: 8px; margin-top: 8px; }
+  .line.sys { color: var(--green-dim); font-style: italic; }
+  .line.fail { color: var(--red); }
+  .cursor::after { content: "█"; color: var(--green); animation: blink 1s steps(2) infinite; margin-left: 2px; }
+  .pane-foot { display: flex; gap: 12px; flex-wrap: wrap; padding: 5px 10px; border-top: 1px solid var(--line); color: var(--green-dim); font-size: 11px; }
+  .pane-foot b { color: var(--green); font-weight: 400; }
+
+  .history { border: 1px solid var(--line); max-height: 76px; overflow-y: auto; padding: 4px 10px; font-size: 12px; color: var(--green-dim); }
+  .history div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  .history .ok { color: var(--green); } .history .run { color: var(--amber); } .history .bad { color: var(--red); }
+
+  .orch { border: 1px solid var(--line); background: var(--panel); display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); min-height: 0; }
+  .orch.running { border-color: var(--amber); box-shadow: 0 0 18px rgba(255,176,0,.10) inset; }
+  .orch-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  .orch-head .pane-title { color: var(--amber); text-shadow: 0 0 6px rgba(255,176,0,.5); }
+  .orch-meta { color: var(--green-dim); font-size: 11px; }
+  .pipeline { display: flex; gap: 4px; flex-wrap: wrap; font-size: 11px; letter-spacing: 1px; }
+  .pipeline span { padding: 1px 6px; border: 1px solid var(--line); color: var(--green-faint); }
+  .pipeline span.done { color: var(--green); border-color: var(--green-dim); }
+  .pipeline span.now { color: var(--bg); background: var(--amber); border-color: var(--amber); animation: blink 1s steps(2) infinite; }
+  .pipeline span.bad { color: var(--red); border-color: var(--red); }
+  .plan, .verdict { padding: 6px 10px; height: 132px; overflow-y: auto; font-size: 12px; }
+  .verdict { border-left: 1px dashed var(--line); }
+  .pstep { display: grid; grid-template-columns: 34px 92px 92px 1fr; gap: 8px; white-space: nowrap; }
+  .pstep .task { overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .pstep .id { color: var(--amber); }
+  .pstep .who { color: var(--cyan); }
+  .st-pending { color: var(--green-faint); } .st-running { color: var(--amber); } .st-succeeded { color: var(--green); }
+  .st-failed { color: var(--red); } .st-skipped { color: var(--green-faint); text-decoration: line-through; }
+  .verdict .ok { color: var(--green); } .verdict .bad { color: var(--red); } .verdict .ans { color: var(--text); white-space: pre-wrap; margin-top: 4px; }
+  .muted { color: var(--green-dim); }
+
+  .cmd { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px solid var(--green-dim); padding: 8px 10px; background: #020503; box-shadow: 0 0 14px rgba(57,255,122,.08); }
+  .prompt { color: var(--green); white-space: nowrap; }
+  .prompt span { color: var(--amber); }
+  #question { flex: 1; min-width: 220px; border: none; background: transparent; padding: 4px 0; font-size: 14px; }
+  #question:focus { box-shadow: none; }
+  .toggles { display: flex; gap: 6px; }
+  .flash { color: var(--amber); font-size: 12px; min-height: 1em; }
+
+  @media (max-width: 900px) {
+    body { overflow: auto; }
+    .app { height: auto; min-height: 100vh; }
+    .panes { grid-template-columns: 1fr; }
+    .orch { grid-template-columns: 1fr; }
+    .verdict { border-left: none; border-top: 1px dashed var(--line); }
+    .pstep { grid-template-columns: 30px 80px 1fr; } .pstep .who { display: none; }
+    .pane { height: 380px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo glow">BRIGADA<span>//</span>ORCHESTRATOR</div>
+    <div class="stat"><span id="led" class="led"></span><span id="link">OFFLINE</span></div>
+    <div class="spacer"></div>
+    <div class="stat">RUNS <b id="s-runs">0</b></div>
+    <div class="stat">ATIVOS <b id="s-active">0</b></div>
+    <div class="stat">TOKENS <b id="s-tokens">0</b></div>
+    <div class="stat">CUSTO <b id="s-cost">US$ 0.0000</b></div>
+    <div class="stat glow" id="clock">--:--:--</div>
+  </header>
+
+  <div class="config">
+    <label>API_KEY <input id="key" type="password" placeholder="X-API-Key" autocomplete="off" size="16"></label>
+    <label>RESTAURANTE <input id="restaurant" type="number" min="1" value="1"></label>
+    <label>HOJE <input id="today" type="date" title="data de referência para 'ontem', 'última terça'..."></label>
+    <button id="connect">conectar</button>
+    <button id="demo" title="simulação local, sem servidor nem custo">demo</button>
+    <span class="flash" id="flash"></span>
+  </div>
+
+  <section class="orch" id="orch">
+    <div class="orch-head">
+      <span class="pane-title">[ ORQUESTRADOR ]</span>
+      <span class="badge idle" id="o-badge">IDLE</span>
+      <div class="pipeline" id="o-pipe"></div>
+      <div class="spacer"></div>
+      <span class="orch-meta" id="o-meta">sem orquestração ainda</span>
+    </div>
+    <div class="plan" id="o-plan"><div class="muted">// o plano do planner aparece aqui: passos, especialistas e dependências</div></div>
+    <div class="verdict" id="o-verdict"><div class="muted">// revisão do critic e resposta final</div></div>
+  </section>
+
+  <main class="panes" id="panes"></main>
+
+  <div class="history" id="history"><div>// histórico de execuções aparece aqui</div></div>
+
+  <form class="cmd" id="cmd" autocomplete="off">
+    <span class="prompt">dono@brigada<span>:</span>~$</span>
+    <input id="question" placeholder="pergunte algo aos agentes… ex.: Por que minhas vendas caíram na última terça?" maxlength="1000">
+    <div class="toggles"><button type="button" id="orch-toggle" class="active" title="o planner escolhe os especialistas">ORQUESTRADOR</button></div>
+    <div class="toggles" id="toggles"></div>
+    <button type="submit">executar ⏎</button>
+  </form>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const AGENTS = [
+    { name: "sales", label: "VENDAS", tools: ["sales_by_period", "top_items", "list_menu_items"] },
+    { name: "menu", label: "CARDÁPIO", tools: ["list_menu_items", "top_items", "reviews_for_item", "pause_menu_item", "create_promotion"] },
+    { name: "operations", label: "OPERAÇÕES", tools: ["delivery_times", "sales_by_period"] },
+  ];
+  const POLL_MS = 1000;
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k) { try { return sessionStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { sessionStorage.setItem(k, v); } catch {} },
+  };
+
+  // ---------- panes ----------
+  const panes = {};
+  const enabled = new Set(AGENTS.map(a => a.name));
+  for (const a of AGENTS) {
+    const el = document.createElement("section");
+    el.className = "pane";
+    el.innerHTML = `
+      <div class="pane-head"><span class="pane-title glow"></span><span class="badge idle">IDLE</span></div>
+      <div class="pane-tools"></div>
+      <div class="log"></div>
+      <div class="pane-foot"><span>STEP <b class="f-steps">0</b></span><span>TOK <b class="f-tok">0</b></span><span>US$ <b class="f-cost">0.0000</b></span><span class="f-model"></span></div>`;
+    el.querySelector(".pane-title").textContent = `[ ${a.label} ]`;
+    el.querySelector(".pane-tools").textContent = "tools: " + a.tools.join(" · ");
+    $("panes").appendChild(el);
+    panes[a.name] = { el, log: el.querySelector(".log"), runId: null, shown: 0, final: false, queue: [], typing: null };
+    bootPane(a.name);
+
+    const t = document.createElement("button");
+    t.type = "button"; t.className = "active"; t.textContent = a.label;
+    t.onclick = () => { enabled.has(a.name) ? enabled.delete(a.name) : enabled.add(a.name); t.classList.toggle("active"); };
+    $("toggles").appendChild(t);
+  }
+
+  function bootPane(name) {
+    const p = panes[name];
+    p.log.textContent = "";
+    p.queue = []; p.typing = null;
+    line(name, "sys", `> agente ${name} pronto. aguardando ordens_`, true);
+  }
+
+  // Lines are typed out character by character; a long backlog is flushed faster.
+  function line(name, cls, text, instant = false, stamp = null) {
+    const p = panes[name];
+    const div = document.createElement("div");
+    div.className = "line " + cls;
+    if (stamp) { const t = document.createElement("span"); t.className = "t"; t.textContent = stamp; div.appendChild(t); }
+    const body = document.createElement("span");
+    div.appendChild(body);
+    p.log.appendChild(div);
+    if (instant) { body.textContent = text; scroll(p); return; }
+    p.queue.push({ body, text, i: 0 });
+  }
+
+  function scroll(p) {
+    const nearBottom = p.log.scrollHeight - p.log.scrollTop - p.log.clientHeight < 80;
+    if (nearBottom || p.queue.length) p.log.scrollTop = p.log.scrollHeight;
+  }
+
+  function typeTick() {
+    for (const p of Object.values(panes)) {
+      p.log.querySelectorAll(".cursor").forEach(c => c.classList.remove("cursor"));
+      if (!p.queue.length) continue;
+      const item = p.queue[0];
+      const speed = 3 + p.queue.length * 6 + Math.floor(item.text.length / 60);
+      item.i = Math.min(item.text.length, item.i + speed);
+      item.body.textContent = item.text.slice(0, item.i);
+      item.body.parentElement.classList.add("cursor");
+      if (item.i >= item.text.length) p.queue.shift();
+      scroll(p);
+    }
+    requestAnimationFrame(typeTick);
+  }
+  requestAnimationFrame(typeTick);
+
+  // ---------- rendering a state snapshot ----------
+  const hhmmss = (iso) => new Date(iso).toLocaleTimeString("pt-BR", { hour12: false });
+  const fmtCost = (v) => Number(v || 0).toFixed(4);
+  const clip = (s, n) => (s.length > n ? s.slice(0, n) + " …" : s);
+
+  const LABEL = Object.fromEntries(AGENTS.map(a => [a.name, a.label]));
+  const STAGES = ["PLANEJAR", "EXECUTAR", "SINTETIZAR", "REVISAR", "RESPOSTA"];
+  const MARK = { pending: "·", running: "▶", succeeded: "✔", failed: "✖", skipped: "↷" };
+  const WORD = { pending: "aguarda", running: "executa", succeeded: "ok", failed: "falhou", skipped: "pulado" };
+
+  function stage(o) {
+    if (o.status === "succeeded") return STAGES.length;
+    if (!o.steps.length && !o.direct_answer) return 0;
+    if (o.steps.some(s => s.status === "running" || s.status === "pending")) return 1;
+    const running = o.roles.find(r => r.status === "running");
+    if (running) return running.plan_step.startsWith("synthesis") ? 2 : running.plan_step.startsWith("review") ? 3 : 0;
+    const last = o.roles[o.roles.length - 1];
+    return last && last.plan_step.startsWith("synthesis") ? 3 : 2;
+  }
+
+  function div(cls, text) { const d = document.createElement("div"); if (cls) d.className = cls; if (text != null) d.textContent = text; return d; }
+  function span(cls, text) { const d = document.createElement("span"); d.className = cls; d.textContent = text; return d; }
+
+  function renderOrch(o) {
+    const box = $("orch"), badge = $("o-badge");
+    box.classList.toggle("running", o.status === "running");
+    badge.className = "badge " + o.status;
+    badge.textContent = { running: "EXECUTANDO", succeeded: "CONCLUÍDO", failed: "FALHOU" }[o.status] || o.status;
+    $("o-meta").textContent = `${o.id.slice(0, 8)} · rodada extra: ${o.rounds ? "sim" : "não"} · ${(o.tokens_in + o.tokens_out).toLocaleString("pt-BR")} tok · US$ ${fmtCost(o.cost_usd)} · ${hhmmss(o.started_at)}`;
+
+    const now = stage(o), pipe = $("o-pipe");
+    pipe.textContent = "";
+    STAGES.forEach((name, i) => {
+      const cls = i < now ? "done" : i === now ? (o.status === "failed" ? "bad" : "now") : "";
+      pipe.appendChild(span(cls, name));
+      if (i < STAGES.length - 1) pipe.appendChild(span("", "▸")).className = "muted";
+    });
+
+    const plan = $("o-plan");
+    plan.textContent = "";
+    plan.appendChild(div("q", `$ ${o.question}`));
+    if (o.direct_answer) plan.appendChild(div("muted", "// sem passos: o planner respondeu direto"));
+    else if (!o.steps.length) plan.appendChild(div("muted cursor", "planejando"));
+    for (const st of o.steps) {
+      const row = div("pstep");
+      row.appendChild(span("id", st.id));
+      row.appendChild(span("st-" + st.status, `${MARK[st.status]} ${WORD[st.status]}`));
+      row.appendChild(span("who", LABEL[st.specialist] || st.specialist));
+      const deps = st.depends_on.length ? `← ${st.depends_on.join(",")}  ` : "";
+      row.appendChild(span("task", `${st.extra ? "[extra] " : ""}${deps}${st.task}`));
+      row.title = st.task;
+      plan.appendChild(row);
+    }
+
+    const v = $("o-verdict");
+    v.textContent = "";
+    const chain = div("muted");
+    o.roles.forEach((r, i) => {
+      const name = r.plan_step === "plan" ? "PLANNER" : r.plan_step.replace("synthesis-", "SÍNTESE ").replace("review-", "REVISÃO ");
+      if (i) chain.appendChild(span("muted", " ▸ "));
+      chain.appendChild(span("st-" + r.status, `${MARK[r.status] || "·"} ${name}`));
+    });
+    v.appendChild(chain);
+    const final = o.answer || o.direct_answer;
+    if (o.status === "succeeded" && final) v.appendChild(div("ans", final));
+    o.reviews.forEach((rv, i) => {
+      v.appendChild(div(rv.approved ? "ok" : "bad", `${rv.approved ? "✔" : "✖"} revisão ${i + 1}: ${rv.approved ? "aprovada" : "reprovada"}`));
+      for (const issue of rv.issues || []) v.appendChild(div("bad", `   - ${issue}`));
+    });
+    if (o.status === "failed") v.appendChild(div("bad", `✖ FALHOU: ${o.error_type || "erro"}`));
+  }
+
+  function render(state) {
+    if (state.orchestrations && state.orchestrations.length) renderOrch(state.orchestrations[0]);
+    const latest = {};
+    for (const r of state.runs) if (!latest[r.agent]) latest[r.agent] = r;  // runs come newest first
+
+    for (const a of AGENTS) {
+      const p = panes[a.name];
+      const run = latest[a.name];
+      const badge = p.el.querySelector(".badge");
+      if (!run) continue;
+      if (run.id !== p.runId) {
+        p.runId = run.id; p.shown = 0; p.final = false;
+        p.log.textContent = ""; p.queue = [];
+        line(a.name, "sys", `── run ${run.id.slice(0, 8)} · ${run.model} ──`, true);
+        // An orchestrated step's question also carries the owner's question and upstream
+        // findings: show the task, and say what context came with it.
+        const [task, ...context] = run.question.split("\n\n");
+        line(a.name, "q", `$ ${task}`, false, hhmmss(run.started_at));
+        if (run.plan_step) {
+          const from = [...run.question.matchAll(/<achado passo="(s\d+)"/g)].map(m => m[1]);
+          line(a.name, "sys", `  passo ${run.plan_step} da orquestração ${run.orchestration_id.slice(0, 8)}${from.length ? ` · recebeu achados de ${from.join(", ")}` : ""}`, true);
+        } else if (context.length) line(a.name, "sys", "  (+ contexto)", true);
+      }
+      for (; p.shown < run.events.length; p.shown++) {
+        const ev = run.events[p.shown];
+        const t = hhmmss(ev.at);
+        const last = p.shown === run.events.length - 1;
+        if (ev.kind === "call") line(a.name, "call", `→ CALL ${ev.tool}(${ev.text})${ev.latency_ms ? `  [${ev.latency_ms}ms]` : ""}`, false, t);
+        else if (ev.kind === "result") line(a.name, "result" + (ev.is_error ? " err" : ""), `← ${ev.is_error ? "ERRO" : "OK"} ${ev.tool || ""} ${ev.size ?? 0}B  ${clip(ev.text, 240)}`, false, t);
+        // A trailing text may be the final answer, printed apart once the run finishes.
+        else if (last && run.status === "running") break;
+        else if (last && ev.text === run.answer) continue;
+        else line(a.name, "text", `· ${ev.text}`, false, t);
+      }
+      if (!p.final && run.status !== "running") {
+        p.final = true;
+        if (run.status === "succeeded") line(a.name, "answer", run.answer || "(sem texto)");
+        else line(a.name, "fail", `✖ FALHOU: ${run.error_type || "erro"} — retome com --resume ${run.id}`);
+      }
+      badge.className = "badge " + run.status;
+      badge.textContent = { running: "EXECUTANDO", succeeded: "CONCLUÍDO", failed: "FALHOU" }[run.status] || run.status;
+      p.el.classList.toggle("running", run.status === "running");
+      p.el.classList.toggle("failed", run.status === "failed");
+      p.el.querySelector(".f-steps").textContent = run.steps;
+      p.el.querySelector(".f-tok").textContent = (run.tokens_in + run.tokens_out).toLocaleString("pt-BR");
+      p.el.querySelector(".f-cost").textContent = fmtCost(run.cost_usd);
+      p.el.querySelector(".f-model").textContent = run.model;
+    }
+
+    $("s-runs").textContent = state.runs.length;
+    $("s-active").textContent = state.runs.filter(r => r.status === "running").length;
+    $("s-tokens").textContent = state.runs.reduce((s, r) => s + r.tokens_in + r.tokens_out, 0).toLocaleString("pt-BR");
+    $("s-cost").textContent = "US$ " + fmtCost(state.runs.reduce((s, r) => s + Number(r.cost_usd), 0));
+
+    const h = $("history");
+    h.textContent = "";
+    for (const r of state.runs) {
+      const d = document.createElement("div");
+      d.className = { running: "run", succeeded: "ok", failed: "bad" }[r.status] || "";
+      const mark = { running: "▶", succeeded: "✔", failed: "✖" }[r.status] || "·";
+      d.textContent = `${mark} ${hhmmss(r.started_at)}  ${r.agent.padEnd(10)} ${r.id.slice(0, 8)}  ${r.steps} steps  US$ ${fmtCost(r.cost_usd)}  “${r.question.split("\n")[0]}”`;
+      h.appendChild(d);
+    }
+    if (!state.runs.length) h.innerHTML = "<div>// nenhuma execução para este restaurante ainda</div>";
+  }
+
+  // ---------- link status ----------
+  function setLink(kind, text) {
+    $("led").className = "led " + kind;
+    $("link").textContent = text;
+  }
+  function flash(text) { $("flash").textContent = text; if (text) setTimeout(() => { if ($("flash").textContent === text) $("flash").textContent = ""; }, 6000); }
+
+  // ---------- live mode ----------
+  let timer = null, demo = null;
+  const restaurant = () => Number($("restaurant").value || 1);
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", "X-API-Key": $("key").value, ...(opts.headers || {}) } });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const b = await res.json(); detail = typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail ?? b); } catch {}
+      const err = new Error(detail); err.status = res.status; throw err;
+    }
+    return res.json();
+  }
+
+  async function poll() {
+    try {
+      render(await api(`/console/runs?restaurant_id=${restaurant()}`));
+      setLink("on", `LINK ATIVO · restaurante ${restaurant()}`);
+    } catch (e) {
+      if (e.status === 401) { setLink("err", "ACESSO NEGADO · API key inválida"); stop(); }
+      else if (e.status === 403) { setLink("err", "ACESSO NEGADO · restaurante fora do escopo"); stop(); }
+      else setLink("warn", "LINK INSTÁVEL · tentando de novo");
+    }
+  }
+  function stop() { clearInterval(timer); timer = null; }
+  function connect() {
+    stopDemo(); stop();
+    store.set("brigada.key", $("key").value);
+    store.set("brigada.restaurant", $("restaurant").value);
+    for (const a of AGENTS) { panes[a.name].runId = null; bootPane(a.name); }
+    setLink("warn", "CONECTANDO…");
+    poll(); timer = setInterval(poll, POLL_MS);
+  }
+
+  let viaOrch = true;
+  $("orch-toggle").onclick = () => {
+    viaOrch = !viaOrch;
+    $("orch-toggle").classList.toggle("active", viaOrch);
+    $("toggles").style.opacity = viaOrch ? ".35" : "1";
+  };
+  $("toggles").style.opacity = ".35";
+
+  $("connect").onclick = connect;
+  $("restaurant").onchange = () => { if (timer) connect(); };
+
+  $("cmd").onsubmit = async (e) => {
+    e.preventDefault();
+    const question = $("question").value.trim();
+    if (!question) return;
+    const agents = AGENTS.map(a => a.name).filter(n => enabled.has(n));
+    if (!viaOrch && !agents.length) { flash("selecione ao menos um agente"); return; }
+    if (demo) { viaOrch ? demoOrchestration(question) : runDemo(question, agents); $("question").value = ""; return; }
+    if (!timer) connect();
+    try {
+      const body = viaOrch
+        ? { question, restaurant_id: restaurant(), orchestrate: true }
+        : { question, restaurant_id: restaurant(), agents };
+      if ($("today").value) body.today = $("today").value;
+      const out = await api("/console/dispatch", { method: "POST", body: JSON.stringify(body) });
+      flash(out.orchestration_id
+        ? `orquestração ${out.orchestration_id.slice(0, 8)} iniciada`
+        : `despachado → ${out.runs.map(r => `${r.agent}:${r.run_id.slice(0, 8)}`).join("  ")}`);
+      $("question").value = "";
+    } catch (err) {
+      flash(`falha ao despachar: ${err.message}`);
+    }
+  };
+
+  // ---------- demo mode: scripted runs, no server, no cost ----------
+  const SCRIPTS = {
+    sales: [
+      ["call", "sales_by_period", "restaurant_id=1, start_date=2026-10-27, end_date=2026-10-27, group_by=channel"],
+      ["result", "sales_by_period", '{"buckets":[{"key":"app","orders":0,"revenue":"0.00"},{"key":"telefone","orders":21,"revenue":"1394.50"},{"key":"balcao","orders":18,"revenue":"1102.10"}]}'],
+      ["call", "sales_by_period", "restaurant_id=1, start_date=2026-09-01, end_date=2026-10-20, group_by=weekday"],
+      ["result", "sales_by_period", '{"buckets":[{"key":"2","orders":87,"revenue":"6120.40"}]}'],
+      ["answer", "Na terça (27/10) você faturou R$ 2.496,60, contra média de R$ 6.120,40 nas terças anteriores. O canal app teve zero pedidos o dia todo — telefone e balcão ficaram normais. Tudo indica que o app ficou fora do ar."],
+    ],
+    menu: [
+      ["call", "reviews_for_item", "restaurant_id=1, max_rating=2, limit=50"],
+      ["result", "reviews_for_item", '{"count":6,"mean_rating":1.8,"reviews":[{"menu_item_id":104,"rating":2,"untrusted_text":"Demorou e veio morno."}]}'],
+      ["call", "top_items", "restaurant_id=1, start_date=2026-10-27, end_date=2026-10-27"],
+      ["result", "top_items", '{"items":[{"name":"Lasanha à bolonhesa","qty":14,"revenue":"839.30"}]}'],
+      ["answer", "O cardápio não explica a queda: só 6 avaliações negativas no período e nenhum prato concentra reclamações. A lasanha segue como mais vendida mesmo na terça."],
+    ],
+    operations: [
+      ["call", "delivery_times", "restaurant_id=1, start_date=2026-10-20, end_date=2026-10-27, group_by=weekday"],
+      ["result", "delivery_times", '{"groups":[{"key":"2","promised":38,"actual":39,"ratio":1.02,"count":24}]}'],
+      ["call", "sales_by_period", "restaurant_id=1, start_date=2026-10-27, end_date=2026-10-27, group_by=hour"],
+      ["result", "sales_by_period", '{"buckets":[{"key":"12","orders":9},{"key":"19","orders":11}]}'],
+      ["answer", "Entregas na terça dentro do prometido (razão 1,02). A operação não foi o gargalo: o volume caiu por falta de pedidos no app, não por atraso."],
+    ],
+  };
+  const demoState = { runs: [], orchestrations: [] };
+  const now = () => new Date().toISOString();
+  const later = (ms, fn) => setTimeout(() => { if (demo) fn(); }, ms);
+
+  // Planner -> three specialists in parallel -> synthesis -> review, on the same timeline.
+  function demoOrchestration(question) {
+    const o = { id: Math.random().toString(16).slice(2).padEnd(32, "0"), question, status: "running", rounds: 0, direct_answer: null,
+      steps: [], roles: [{ plan_step: "plan", agent: "planner", status: "running" }], reviews: [], answer: null, error_type: null,
+      tokens_in: 0, tokens_out: 0, cost_usd: 0, started_at: now(), finished_at: null };
+    demoState.orchestrations.unshift(o);
+    const spend = (tin, tout) => { o.tokens_in += tin; o.tokens_out += tout; o.cost_usd += (tin * 3 + tout * 15) / 1e6; };
+    render(demoState);
+    later(1400, () => {
+      o.roles[0].status = "succeeded"; spend(1300, 160);
+      o.steps = [
+        { id: "s1", specialist: "sales", task: "Compare o faturamento da última terça com as terças anteriores, por canal.", depends_on: [], extra: false, status: "running" },
+        { id: "s2", specialist: "operations", task: "Veja se as entregas da última terça atrasaram mais que o normal.", depends_on: [], extra: false, status: "running" },
+        { id: "s3", specialist: "menu", task: "Verifique se há reclamações recentes que expliquem a queda.", depends_on: [], extra: false, status: "running" },
+      ];
+      let left = o.steps.length;
+      for (const st of o.steps) {
+        runDemo(st.task, [st.specialist], (run) => {
+          st.status = "succeeded"; spend(run.tokens_in, run.tokens_out);
+          if (--left) return render(demoState);
+          o.roles.push({ plan_step: "synthesis-1", agent: "synthesizer", status: "running" });
+          render(demoState);
+          later(1800, () => {
+            o.roles[1].status = "succeeded"; spend(2100, 260);
+            o.roles.push({ plan_step: "review-1", agent: "critic", status: "running" });
+            render(demoState);
+            later(1500, () => {
+              o.roles[2].status = "succeeded"; spend(1900, 90);
+              o.reviews.push({ approved: true, issues: [], extra_steps: [] });
+              o.status = "succeeded"; o.finished_at = now();
+              o.answer = "Sua venda caiu por causa do app: na terça (27/10) o canal app teve zero pedidos, e o faturamento foi R$ 2.496,60 contra R$ 6.120,40 nas terças anteriores. Entregas (razão 1,02) e cardápio (6 avaliações negativas) não explicam a queda. Verifique o que derrubou o app nesse dia.";
+              render(demoState);
+            });
+          });
+        });
+      }
+      render(demoState);
+    });
+  }
+
+  function runDemo(question, agents, onDone) {
+    for (const name of agents) {
+      const run = { id: Math.random().toString(16).slice(2).padEnd(32, "0"), agent: name, question, status: "running", model: "claude-sonnet-4-6",
+        steps: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, answer: null, error_type: null, started_at: now(), finished_at: null, events: [] };
+      demoState.runs.unshift(run);
+      let i = 0;
+      const next = () => {
+        const s = SCRIPTS[name][i++];
+        if (!s || !demo) return;
+        run.steps += s[0] === "result" ? 0 : 1;
+        if (s[0] === "answer") { run.status = "succeeded"; run.answer = s[1]; run.finished_at = now(); }
+        if (s[0] === "answer" && onDone) { render(demoState); onDone(run); return; }
+        else run.events.push({ step: run.steps, kind: s[0], tool: s[1], text: s[2], at: now(), is_error: false, size: s[2].length, latency_ms: s[0] === "call" ? 600 + Math.floor(Math.random() * 900) : null });
+        if (s[0] !== "result") { run.tokens_in += 900 + Math.floor(Math.random() * 400); run.tokens_out += 80 + Math.floor(Math.random() * 120); run.cost_usd = (run.tokens_in * 3 + run.tokens_out * 15) / 1e6; }
+        render(demoState);
+        setTimeout(next, 900 + Math.random() * 1600);
+      };
+      setTimeout(next, 400 + Math.random() * 800);
+    }
+    render(demoState);
+  }
+  function startDemo() {
+    stop();
+    demo = true; $("demo").classList.add("active");
+    setLink("on", "MODO DEMO · dados simulados");
+    for (const a of AGENTS) { panes[a.name].runId = null; bootPane(a.name); }
+    demoState.runs = []; demoState.orchestrations = [];
+    demoOrchestration("Por que minhas vendas caíram na última terça?");
+  }
+  function stopDemo() { demo = null; $("demo").classList.remove("active"); }
+  $("demo").onclick = () => (demo ? (stopDemo(), setLink("", "OFFLINE")) : startDemo());
+
+  // ---------- boot ----------
+  setInterval(() => { $("clock").textContent = new Date().toLocaleTimeString("pt-BR", { hour12: false }); }, 1000);
+  $("key").value = store.get("brigada.key") || "";
+  $("restaurant").value = store.get("brigada.restaurant") || "1";
+  const params = new URLSearchParams(location.search);
+  if (params.has("demo")) startDemo();
+  else if ($("key").value) connect();
+  $("question").focus();
+})();
+</script>
+</body>
+</html>

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import importlib
 import inspect
 import logging
@@ -17,12 +16,14 @@ from zoneinfo import ZoneInfo
 
 import anthropic
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from brigada import __version__
+from brigada.api import console
+from brigada.api.auth import get_allowed_restaurants, require_restaurant
 from brigada.api.schemas import Answerer, AnswerOutcome, AskRequest, AskResponse, HealthResponse
 from brigada.config import Settings, get_settings
 from brigada.observability.tracing import current_trace_id, get_tracer, setup_tracing
@@ -51,6 +52,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Brigada", version=__version__, lifespan=lifespan)
+app.include_router(console.router)
 
 
 @app.middleware("http")
@@ -196,24 +198,6 @@ def _today(settings: Settings) -> date:
     return datetime.now(ZoneInfo(settings.timezone)).date()
 
 
-def get_allowed_restaurants(
-    settings: Annotated[Settings, Depends(get_settings)],
-    x_api_key: Annotated[str | None, Header()] = None,
-) -> frozenset[int]:
-    """Resolve the caller's API key to the restaurant ids it may query. Fails closed."""
-    if x_api_key:
-        for key, restaurant_ids in settings.api_key_scopes().items():
-            if hmac.compare_digest(key.encode(), x_api_key.encode()):
-                return restaurant_ids
-    # Nothing of the key itself is logged: a mistyped real key would leak part of it.
-    logger.warning("rejected API key (sent=%s, length=%d)", bool(x_api_key), len(x_api_key or ""))
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing or invalid X-API-Key",
-        headers={"WWW-Authenticate": "ApiKey"},
-    )
-
-
 @app.post("/ask", response_model=AskResponse)
 async def ask(
     body: AskRequest,
@@ -221,15 +205,7 @@ async def ask(
     answerer: Annotated[Answerer, Depends(get_answerer)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AskResponse:
-    if body.restaurant_id not in allowed:
-        logger.warning(
-            "API key not allowed for restaurant %s (allowed: %s)",
-            body.restaurant_id,
-            sorted(allowed),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="API key not allowed for this restaurant"
-        )
+    require_restaurant(body.restaurant_id, allowed)
     started = time.perf_counter()
     result = answerer(body.question, body.restaurant_id, _today(settings))
     outcome: AnswerOutcome = await result if inspect.isawaitable(result) else result

@@ -73,6 +73,12 @@ class AgentConfig:
     max_tokens: int = 8000
     tool_timeout_seconds: float = 15.0
     retry: RetryPolicy = DEFAULT_POLICY
+    # Structured output: a successful call to one of these tools ends the run, and its result
+    # becomes the answer. Combined with ``tool_choice={"type": "any"}`` the model must answer
+    # through the tool, whose executor validates the input (a rejected one goes back as an
+    # error for the model to fix).
+    terminal_tools: frozenset[str] = frozenset()
+    tool_choice: dict[str, Any] | None = None
 
 
 def make_client(api_key: str | None = None, timeout_seconds: float = 60.0) -> ModelClient:
@@ -103,11 +109,24 @@ class Agent:
         resuming a run that failed, e.g. with ``MaxStepsExceeded``); otherwise the budget
         counts from the start of the conversation.
         """
+        try:
+            return await self._resume(messages, result, fresh_budget)
+        except Exception as exc:
+            # Tokens were paid and tools may have run (a write proposed) before the failure:
+            # the caller needs them for cost totals and for security scoring.
+            exc.partial = result  # type: ignore[attr-defined]
+            raise
+
+    async def _resume(
+        self, messages: list[MessageParam], result: RunResult, fresh_budget: bool
+    ) -> RunResult:
         limit = result.steps + self.config.max_steps if fresh_budget else self.config.max_steps
         if not messages:
             raise ValueError("cannot resume an empty conversation")
         if _pending_tool_calls(messages):
-            await self._run_tools(messages, result)
+            if (final := await self._run_tools(messages, result)) is not None:
+                result.text = final
+                return result
         elif messages[-1]["role"] == "assistant":
             # The model already answered; calling it again would send an assistant-last
             # conversation (a prefill), which current models reject.
@@ -121,7 +140,9 @@ class Agent:
                 case "tool_use":
                     if not _pending_tool_calls(messages):
                         raise UnexpectedStopReason("tool_use without tool_use blocks")
-                    await self._run_tools(messages, result)
+                    if (final := await self._run_tools(messages, result)) is not None:
+                        result.text = final
+                        return result
                 case "max_tokens":
                     raise ResponseTruncated(
                         f"response hit max_tokens={self.config.max_tokens} at step {result.steps}"
@@ -145,8 +166,8 @@ class Agent:
                     model=cfg.model,
                     max_tokens=cfg.max_tokens,
                     system=cfg.system,
-                    tools=self.tools,
                     messages=messages,
+                    **self._tool_params(),
                 ),
                 cfg.retry,
             )
@@ -163,7 +184,15 @@ class Agent:
         await self.observer.on_model_response(step, response, cost, latency_ms, messages)
         return response
 
-    async def _run_tools(self, messages: list[MessageParam], result: RunResult) -> None:
+    def _tool_params(self) -> dict[str, Any]:
+        if not self.tools:
+            return {}
+        if self.config.tool_choice is None:
+            return {"tools": self.tools}
+        return {"tools": self.tools, "tool_choice": self.config.tool_choice}
+
+    async def _run_tools(self, messages: list[MessageParam], result: RunResult) -> str | None:
+        """Run the pending calls. Returns the result of a successful terminal tool, if any."""
         calls = _pending_tool_calls(messages)
         result.tools_called.extend(calls)
         outcomes = await run_tools(calls, self._traced_executor, self.config.tool_timeout_seconds)
@@ -184,6 +213,13 @@ class Agent:
             }
         )
         await self.observer.on_tool_results(result.steps, outcomes, messages)
+        terminal = {c.id for c in calls if c.name in self.config.terminal_tools}
+        result.tool_outputs.extend(
+            o.content for o in outcomes if not o.is_error and o.tool_use_id not in terminal
+        )
+        return next(
+            (o.content for o in outcomes if o.tool_use_id in terminal and not o.is_error), None
+        )
 
     async def _traced_executor(self, call: ToolCall) -> str:
         with tool_span(call.name, {"brigada.tool_use_id": call.id}):

@@ -23,6 +23,7 @@ from brigada.config import get_settings
 from brigada.mcp_server.audit import (
     RESTAURANT_ID_META_KEY,
     RUN_ID_META_KEY,
+    TAINTED_META_KEY,
     TOOL_USE_ID_META_KEY,
 )
 from brigada.runtime.tools import ToolExecutionError, ToolExecutor
@@ -108,16 +109,11 @@ async def _toolbox(
     async def execute(call: ToolCall) -> str:
         if call.name not in names:
             raise ToolExecutionError(f"tool {call.name!r} is not available to this agent")
-        if call.name in WRITE_TOOLS and state["tainted"]:
-            raise ToolExecutionError(
-                f"tool {call.name!r} is disabled: this conversation read customer-written text, "
-                "which may contain instructions. Tell the owner to request the change directly."
-            )
+        # The server refuses writes from a tainted run and audits the attempt.
+        call_meta = {**meta, TOOL_USE_ID_META_KEY: call.id, TAINTED_META_KEY: state["tainted"]}
         if call.name in UNTRUSTED_OUTPUT_TOOLS:
             state["tainted"] = True  # set before the call: a failed read may still carry text
-        result = await client.call_tool(
-            call.name, call.input, meta={**meta, TOOL_USE_ID_META_KEY: call.id}
-        )
+        result = await client.call_tool(call.name, call.input, meta=call_meta)
         text = _result_text(result.structured_content, result.content)
         if result.is_error:
             raise ToolExecutionError(text)

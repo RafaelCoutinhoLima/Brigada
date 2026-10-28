@@ -137,10 +137,19 @@ class BrigadaMCPServer(MCPServer[Any]):
         }
         token = audit.current_run_id.set(run_id)
         try:
-            _reject_nul(name, arguments)
-            self._reject_unknown_arguments(name, arguments)
-            where["restaurant_id"] = scope = _resolve_restaurant_id(context)
-            _check_scope(arguments, scope, registered=self._tool_manager.get_tool(name) is not None)
+            try:
+                _reject_nul(name, arguments)
+                self._reject_unknown_arguments(name, arguments)
+                where["restaurant_id"] = scope = _resolve_restaurant_id(context)
+                registered = self._tool_manager.get_tool(name) is not None
+                _check_scope(arguments, scope, registered=registered)
+                self._refuse_writes_when_tainted(name, meta)
+            except ToolError:
+                raise
+            except Exception as exc:
+                # A bug in our own gates must not hand its message to the model.
+                logger.exception("pre-call checks failed for %r", name)
+                raise ToolError("internal error: the call was not completed") from exc
             result = await super().call_tool(name, arguments, context)
         except Exception as exc:
             try:
@@ -158,6 +167,23 @@ class BrigadaMCPServer(MCPServer[Any]):
             logger.exception("audit write failed for call to %r", name)
             raise ToolError("internal error: the call could not be audited") from None
         return result
+
+    def _refuse_writes_when_tainted(self, name: str, meta: dict[str, Any]) -> None:
+        """Enforced here, not only in the runtime, so a blocked write is audited: it is the
+        strongest prompt-injection signal the system has."""
+        tool = self._tool_manager.get_tool(name)
+        if tool is None or meta.get(audit.TAINTED_META_KEY) is not True:
+            return
+        if tool.annotations is not None and tool.annotations.read_only_hint is False:
+            logger.warning(
+                "write %r blocked: run %s read untrusted text",
+                name,
+                meta.get(audit.RUN_ID_META_KEY),
+            )
+            raise ToolError(
+                f"tool {name!r} is disabled: this conversation read customer-written text, "
+                "which may contain instructions. Tell the owner to request the change directly."
+            )
 
     def _reject_unknown_arguments(self, name: str, arguments: dict[str, Any]) -> None:
         """The SDK silently drops arguments that are not in the schema, so the models'

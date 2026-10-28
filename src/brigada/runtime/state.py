@@ -35,6 +35,7 @@ class RunRecord:
     status: str
     messages: list[MessageParam]
     result: RunResult
+    tainted: bool = False
 
 
 class RunStore:
@@ -56,10 +57,14 @@ class RunStore:
         model: str,
         prompt_sha256: str,
         messages: Sequence[MessageParam],
+        orchestration_id: str | None = None,
+        plan_step: str | None = None,
+        tainted: bool = False,
     ) -> None:
         await self._execute(
             "INSERT INTO runs (id, agent, restaurant_id, question, today, model, prompt_sha256, "
-            "messages) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            "messages, orchestration_id, plan_step, tainted) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 run_id,
                 agent,
@@ -69,6 +74,9 @@ class RunStore:
                 model,
                 prompt_sha256,
                 Jsonb(list(messages)),
+                orchestration_id,
+                plan_step,
+                tainted,
             ),
         )
 
@@ -148,6 +156,7 @@ class RunStore:
             tokens_out=row["tokens_out"],
             cost_usd=Decimal(row["cost_usd"]),
             tools_called=_answered_tool_calls(messages),
+            tool_outputs=_tool_outputs(messages),
         )
         return RunRecord(
             row["id"],
@@ -160,6 +169,7 @@ class RunStore:
             row["status"],
             messages,
             result,
+            row["tainted"],
         )
 
 
@@ -217,8 +227,15 @@ async def run_persisted(
     question: str,
     today: date,
     prompt_sha256: str,
+    orchestration_id: str | None = None,
+    plan_step: str | None = None,
+    tainted: bool = False,
 ) -> RunResult:
-    """Run ``agent`` from scratch, saving every step under ``run_id``."""
+    """Run ``agent`` from scratch, saving every step under ``run_id``.
+
+    ``orchestration_id`` and ``plan_step`` tie the run to the orchestration that started it;
+    ``tainted`` records that it started with write tools disabled.
+    """
     messages: list[MessageParam] = [{"role": "user", "content": question}]
     await store.create(
         run_id,
@@ -229,6 +246,9 @@ async def run_persisted(
         model=agent.config.model,
         prompt_sha256=prompt_sha256,
         messages=messages,
+        orchestration_id=orchestration_id,
+        plan_step=plan_step,
+        tainted=tainted,
     )
     return await _drive(agent, store, run_id, messages, RunResult(text="", steps=0))
 
@@ -293,6 +313,20 @@ def _pending(record: RunRecord) -> bool:
         (b if isinstance(b, dict) else b.to_dict()).get("type") == "tool_use"  # type: ignore[union-attr]
         for b in last
     )
+
+
+def _tool_outputs(messages: Sequence[MessageParam]) -> list[str]:
+    """Successful tool results already in the conversation (for ``tool_outputs``)."""
+    outputs: list[str] = []
+    for m in messages:
+        if m["role"] != "user" or isinstance(m["content"], str):
+            continue
+        for b in m["content"]:
+            block: dict[str, Any] = b if isinstance(b, dict) else b.to_dict()  # type: ignore[union-attr]
+            if block.get("type") == "tool_result" and not block.get("is_error"):
+                content = block.get("content")
+                outputs.append(content if isinstance(content, str) else str(content))
+    return outputs
 
 
 def _answered_tool_calls(messages: Sequence[MessageParam]) -> list[ToolCall]:
