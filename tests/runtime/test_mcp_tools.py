@@ -1,5 +1,7 @@
 import json
+import subprocess
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -115,3 +117,18 @@ async def test_agent_errors_come_out_unwrapped() -> None:
         await ask_sales(
             "q", 1, date(2026, 10, 28), client=FakeClient(*looping), server=build_server()
         )
+
+
+def test_child_process_ignores_the_parents_dotenv(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=sk-ant-canary\nAPI_KEYS=canary=1\n")
+    params = stdio_server()
+    probe = "from brigada.config import get_settings as g; s = g(); print(s.anthropic_api_key)"
+    out = subprocess.run(
+        [params.command, "-c", probe],
+        cwd=tmp_path,
+        env=params.env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "canary" not in out.stdout

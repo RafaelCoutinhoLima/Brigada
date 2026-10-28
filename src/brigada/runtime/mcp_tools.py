@@ -36,6 +36,7 @@ def stdio_server() -> StdioServerParameters:
     the default safe set plus DATABASE_URL (never ANTHROPIC_API_KEY)."""
     env = get_default_environment()
     env["DATABASE_URL"] = os.environ.get("DATABASE_URL", get_settings().database_url)
+    env["BRIGADA_NO_DOTENV"] = "1"
     return StdioServerParameters(command=sys.executable, args=["-m", "brigada.mcp_server"], env=env)
 
 

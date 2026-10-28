@@ -1,10 +1,15 @@
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Child processes (the MCP server) set BRIGADA_NO_DOTENV so they only see the variables
+    # they were explicitly given, not every secret in the parent's .env.
+    model_config = SettingsConfigDict(
+        env_file=None if os.environ.get("BRIGADA_NO_DOTENV") else ".env", extra="ignore"
+    )
 
     anthropic_api_key: str = ""
     database_url: str = "postgresql://brigada:brigada@localhost:5432/brigada"
