@@ -17,9 +17,10 @@
    the findings of the steps it depends on; a step whose dependency failed is skipped.
 5. Each **specialist** runs the agent runtime loop against the MCP server.
 6. **Synthesizer** merges the findings into one answer (skipped when one step answered alone).
-7. **Critic** checks the answer: every number must trace back to a finding (helped by a
-   deterministic list of untraced numbers). It may request one extra round; if the answer is
-   still rejected it ships with the critic's caveats. See ADR 0003.
+7. **Critic** checks the answer: every number and date must trace back to a tool result,
+   helped by a deterministic list of the ones that do not (specialist prose is not a source;
+   numbers that only appear in the owner's question are listed apart). It may request one
+   extra round; if the answer is still rejected it ships with the critic's caveats. See ADR 0003.
 8. The answer is returned with the full trace id and the orchestration id.
 
 ## Components
@@ -67,6 +68,12 @@ promotions(id, restaurant_id, menu_item_id, discount_pct, start_date, end_date, 
   - once a run has read untrusted text, its write tools are disabled (also after a resume);
   - the same holds across agents: a step that receives findings derived from review text (or
     any step of the critic's extra round once a review was read) starts with writes disabled;
+    the MCP server enforces it (the runtime sends the run's taint in `_meta`), so every
+    blocked write is audited;
+  - findings and answers are quoted to the synthesizer and critic with `<` and `>` neutralized,
+    so customer text cannot close a tag and pose as orchestrator text;
+  - the console caps in-flight work per restaurant and overall (429), since dispatch returns
+    before the work is done;
   - every call is audited, including rejected ones, with the trusted restaurant and `tool_use_id`; audit writes cannot fail on content;
   - database and internal errors never reach the model or the HTTP client; they are logged server-side;
   - automated attack tests (NUL bytes, scope types, SQL injection, cross-restaurant reads) run in CI.
