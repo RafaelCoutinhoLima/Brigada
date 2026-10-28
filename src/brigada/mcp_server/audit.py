@@ -1,0 +1,67 @@
+"""Audit log: one ``tool_audit`` row per tool call, success or error.
+
+``run_id`` links audit rows to an agent run. It is resolved per call, in this order:
+
+1. ``_meta["brigada/run_id"]`` on the MCP ``tools/call`` request (how the runtime passes it
+   across the stdio process boundary: ``session.call_tool(..., meta={RUN_ID_META_KEY: id})``);
+2. the ``current_run_id`` context variable, for in-process callers (``with run_context(id):``).
+"""
+
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any
+
+from psycopg.types.json import Jsonb
+
+from brigada.mcp_server.db import Conn, connect
+
+RUN_ID_META_KEY = "brigada/run_id"
+
+current_run_id: ContextVar[str | None] = ContextVar("brigada_run_id", default=None)
+
+
+@contextmanager
+def run_context(run_id: str | None) -> Iterator[None]:
+    """Attribute every tool call made inside the block to ``run_id``."""
+    token = current_run_id.set(run_id)
+    try:
+        yield
+    finally:
+        current_run_id.reset(token)
+
+
+def record(
+    conn: Conn,
+    *,
+    tool: str,
+    args: Mapping[str, Any],
+    result: Any = None,
+    error: str | None = None,
+    run_id: str | None = None,
+    approved_by: str | None = None,
+) -> int:
+    """Insert an audit row on ``conn``; the caller owns the transaction. ``result`` is JSON-able."""
+    row = conn.execute(
+        "INSERT INTO tool_audit (run_id, tool, args, result, error, approved_by) "
+        "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+        (
+            run_id,
+            tool,
+            Jsonb(dict(args)),
+            Jsonb(result) if result is not None else None,
+            error,
+            approved_by,
+        ),
+    ).fetchone()
+    assert row is not None
+    return int(row["id"])
+
+
+def record_standalone(**kwargs: Any) -> int:
+    """Same as ``record`` on a fresh connection, committed immediately.
+
+    Used for error paths, where the connection that failed may be in an aborted transaction.
+    """
+    with connect() as conn:
+        return record(conn, **kwargs)
