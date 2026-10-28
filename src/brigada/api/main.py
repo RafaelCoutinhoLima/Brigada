@@ -36,6 +36,7 @@ DB_CONNECT_TIMEOUT_SECONDS = 2
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    get_settings().api_key_scopes()  # malformed API_KEYS fails at boot, not per request
     setup_tracing(service_name="brigada-api")
     yield
 
@@ -95,7 +96,7 @@ def health_db(settings: Annotated[Settings, Depends(get_settings)]) -> dict[str,
         logger.exception("Database health check failed")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"status": "error", "error": f"{type(exc).__name__}: {exc}"},
+            detail={"status": "error", "error": "database unavailable"},
         ) from exc
     return {"status": "ok"}
 

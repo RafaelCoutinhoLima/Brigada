@@ -53,7 +53,8 @@ def test_health_db_down_returns_503(client: TestClient) -> None:
     assert resp.status_code == 503
     detail = resp.json()["detail"]
     assert detail["status"] == "error"
-    assert detail["error"]
+    assert detail["error"] == "database unavailable"
+    assert "127.0.0.1" not in resp.text
 
 
 @pytest.mark.parametrize(
