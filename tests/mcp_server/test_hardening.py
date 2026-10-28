@@ -123,3 +123,25 @@ async def test_odd_scope_values_never_break_the_audit(
         await server.call_tool("list_menu_items", {"restaurant_id": 1})
     [row] = audit_rows(db, run_id)
     assert row["error"] is not None
+
+
+async def test_unknown_arguments_are_rejected_not_dropped(
+    server: BrigadaMCPServer, db: Conn, run_id: str
+) -> None:
+    with pytest.raises(ToolError, match=r"unknown \['junk'\]"):
+        await scoped_call(
+            server,
+            "pause_menu_item",
+            {"restaurant_id": 1, "menu_item_id": 101, "reason": "x", "junk": "ok"},
+        )
+    assert pending_for(db, run_id) == []
+    assert len(audit_rows(db, run_id)) == 1
+
+
+async def test_registered_tool_without_restaurant_id_fails_closed(
+    server: BrigadaMCPServer, run_id: str
+) -> None:
+    from brigada.mcp_server.audit import restaurant_context
+
+    with restaurant_context(1), pytest.raises(ToolError, match="restaurant_id is required"):
+        await server.call_tool("list_menu_items", {})

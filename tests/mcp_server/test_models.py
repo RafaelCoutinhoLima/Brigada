@@ -158,3 +158,17 @@ def test_reason_length_enforced_after_strip(reason: str) -> None:
 def test_reason_is_stripped() -> None:
     inp = PauseMenuItemInput(restaurant_id=1, menu_item_id=101, reason="  acabou o estoque  ")
     assert inp.reason == "acabou o estoque"
+
+
+def test_date_range_boundary_is_366_days_inclusive() -> None:
+    from datetime import date, timedelta
+
+    from pydantic import ValidationError
+
+    from brigada.mcp_server.models import MAX_RANGE_DAYS, SalesByPeriodInput
+
+    start = date(2026, 1, 1)
+    ok = start + timedelta(days=MAX_RANGE_DAYS - 1)  # 366 days counting both ends
+    SalesByPeriodInput(restaurant_id=1, start_date=start, end_date=ok)
+    with pytest.raises(ValidationError, match="maximum is 366"):
+        SalesByPeriodInput(restaurant_id=1, start_date=start, end_date=ok + timedelta(days=1))

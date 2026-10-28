@@ -27,6 +27,7 @@ def test_stdio_child_gets_database_url_but_not_the_api_key(
     assert params.env is not None
     assert params.env["DATABASE_URL"] == "postgresql://x@localhost/db"
     assert "ANTHROPIC_API_KEY" not in params.env
+    assert params.env["TIMEZONE"] == "America/Sao_Paulo"
 
 
 def test_system_prompt_ends_with_run_context() -> None:

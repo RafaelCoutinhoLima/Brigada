@@ -17,6 +17,9 @@ ToolExecutor = Callable[[ToolCall], Awaitable[str]]
 """Runs one tool and returns its result as text (usually JSON). Raises on failure."""
 
 
+MAX_ERROR_CHARS = 1000
+
+
 class ToolExecutionError(Exception):
     """A tool ran and reported an error (e.g. MCP ``isError``); the message goes to the model."""
 
@@ -39,7 +42,10 @@ async def _run_one(call: ToolCall, executor: ToolExecutor, timeout_seconds: floa
         return ToolOutcome(call.id, message, is_error=True)
     except ToolExecutionError as exc:
         logger.warning("tool %r reported an error: %s", call.name, exc)
-        return ToolOutcome(call.id, str(exc), is_error=True)
+        message = str(exc)
+        if len(message) > MAX_ERROR_CHARS:  # an error is not a channel for bulk content
+            message = message[:MAX_ERROR_CHARS] + " [truncated]"
+        return ToolOutcome(call.id, message, is_error=True)
     except Exception as exc:
         # Unexpected failure in our own executor: logged with traceback, reported to the model
         # without internals (no traceback, no connection strings).

@@ -79,3 +79,11 @@ async def test_cancelling_the_run_cancels_the_tools() -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_long_tool_errors_are_truncated_for_the_model() -> None:
+    async def noisy(c: ToolCall) -> str:
+        raise ToolExecutionError("x" * 5000)
+
+    [out] = await run_tools([call("noisy")], noisy, timeout_seconds=1)
+    assert out.is_error and len(out.content) < 1100 and out.content.endswith("[truncated]")

@@ -227,3 +227,16 @@ def test_upstream_error_is_503_without_details(client: TestClient) -> None:
     resp = client.post("/ask", json={"question": "oi", "restaurant_id": 1})
     assert resp.status_code == 503
     assert "secret-host" not in resp.text
+
+
+def test_rejected_keys_are_logged_without_the_key(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    app.dependency_overrides[get_answerer] = lambda: _fake_answerer
+    client.post(
+        "/ask", json={"question": "oi", "restaurant_id": 1}, headers={"X-API-Key": "wrongkey123"}
+    )
+    client.post("/ask", json={"question": "oi", "restaurant_id": 3})  # valid key, other tenant
+    assert "prefix='wron'" in caplog.text
+    assert "wrongkey123" not in caplog.text
+    assert "not allowed for restaurant 3" in caplog.text

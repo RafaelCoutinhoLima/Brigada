@@ -205,6 +205,8 @@ def get_allowed_restaurants(
         for key, restaurant_ids in settings.api_key_scopes().items():
             if hmac.compare_digest(key.encode(), x_api_key.encode()):
                 return restaurant_ids
+    # Never log the key itself: only whether one was sent and its first characters.
+    logger.warning("rejected API key (sent=%s, prefix=%r)", bool(x_api_key), (x_api_key or "")[:4])
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Missing or invalid X-API-Key",
@@ -220,6 +222,11 @@ async def ask(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AskResponse:
     if body.restaurant_id not in allowed:
+        logger.warning(
+            "API key not allowed for restaurant %s (allowed: %s)",
+            body.restaurant_id,
+            sorted(allowed),
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="API key not allowed for this restaurant"
         )

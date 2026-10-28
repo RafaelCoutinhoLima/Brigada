@@ -250,3 +250,9 @@ async def test_protocol_error_result_for_bad_restaurant(db: Conn, run_id: str) -
         )
     assert result.is_error
     assert audit_rows(db, run_id)[0]["error"] is not None
+
+
+async def test_max_rating_is_inclusive(server: BrigadaMCPServer) -> None:
+    out = await call(server, "reviews_for_item", restaurant_id=2, max_rating=2, limit=200)
+    ratings = {r["rating"] for r in out["reviews"]}
+    assert 2 in ratings and max(ratings) == 2

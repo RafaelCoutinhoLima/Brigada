@@ -138,8 +138,9 @@ class BrigadaMCPServer(MCPServer[Any]):
         token = audit.current_run_id.set(run_id)
         try:
             _reject_nul(name, arguments)
+            self._reject_unknown_arguments(name, arguments)
             where["restaurant_id"] = scope = _resolve_restaurant_id(context)
-            _check_scope(arguments, scope)
+            _check_scope(arguments, scope, registered=self._tool_manager.get_tool(name) is not None)
             result = await super().call_tool(name, arguments, context)
         except Exception as exc:
             try:
@@ -157,6 +158,16 @@ class BrigadaMCPServer(MCPServer[Any]):
             logger.exception("audit write failed for call to %r", name)
             raise ToolError("internal error: the call could not be audited") from None
         return result
+
+    def _reject_unknown_arguments(self, name: str, arguments: dict[str, Any]) -> None:
+        """The SDK silently drops arguments that are not in the schema, so the models'
+        ``extra="forbid"`` never fires. Unknown keys are a malformed (or probing) call."""
+        tool = self._tool_manager.get_tool(name)
+        if tool is None:
+            return  # unknown tool: the SDK rejects it next, and it is audited
+        unknown = set(arguments) - set(tool.parameters.get("properties", {}))
+        if unknown:
+            raise ToolError(f"invalid arguments: unknown {sorted(unknown)}")
 
 
 async def _audit(**kwargs: Any) -> None:
@@ -202,10 +213,12 @@ def _resolve_restaurant_id(context: Context[Any, Any] | None) -> int | None:
     return value
 
 
-def _check_scope(arguments: dict[str, Any], scope: int | None) -> None:
-    """Fail closed: a call carrying ``restaurant_id`` needs a bound scope that matches it."""
+def _check_scope(arguments: dict[str, Any], scope: int | None, *, registered: bool) -> None:
+    """Fail closed: every call to a real tool needs ``restaurant_id`` and a matching scope."""
     if "restaurant_id" not in arguments:
-        return  # unknown tool or malformed call: the SDK rejects it next, and it's audited
+        if registered:
+            raise ToolError("invalid arguments: restaurant_id is required")
+        return  # unknown tool: the SDK rejects it next, and it is audited
     if scope is None:
         raise ToolError(
             f"no restaurant scope bound for this run: pass _meta[{audit.RESTAURANT_ID_META_KEY!r}]"
