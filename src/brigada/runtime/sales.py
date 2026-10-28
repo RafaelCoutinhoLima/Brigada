@@ -1,34 +1,23 @@
-"""The Sales specialist: the first concrete agent, used to prove the runtime end to end."""
+"""The Sales specialist: the first concrete agent, used to prove the runtime end to end.
 
-import uuid
+Kept as a thin entry point over ``brigada.runtime.specialists``.
+"""
+
 from datetime import date
 
-from anthropic.types import ToolParam
 from mcp import StdioServerParameters
 from mcp.server.mcpserver import MCPServer
 
-from brigada.config import get_settings
-from brigada.prompts import load_prompt
-from brigada.runtime.agent import Agent, AgentConfig, ModelClient, make_client
-from brigada.runtime.mcp_tools import mcp_toolbox, read_untrusted
-from brigada.runtime.state import RunStore, resume_persisted, run_persisted
-from brigada.runtime.tools import ToolExecutor
+from brigada.runtime.agent import ModelClient
+from brigada.runtime.specialists import SALES, ask, resume, system_prompt
+from brigada.runtime.state import RunStore
 from brigada.runtime.types import RunResult
 
-SALES_TOOLS = ("sales_by_period", "top_items", "list_menu_items")
+SALES_TOOLS = SALES.tools
 
 
 def sales_system_prompt(restaurant_id: int, today: date) -> str:
-    # Run context goes at the end so the stable instructions stay a cacheable prefix.
-    return (
-        f"{load_prompt('sales').text}\n"
-        f"Contexto desta conversa:\n"
-        f"- restaurant_id: {restaurant_id}\n"
-        f"- hoje: {today.isoformat()} ({_WEEKDAYS[today.weekday()]})\n"
-    )
-
-
-_WEEKDAYS = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
+    return system_prompt(SALES, restaurant_id, today)
 
 
 async def ask_sales(
@@ -41,23 +30,16 @@ async def ask_sales(
     run_id: str | None = None,
     store: RunStore | None = None,
 ) -> RunResult:
-    """Answer one question. With a ``store``, every step is saved and the run is resumable."""
-    run_id = run_id or uuid.uuid4().hex
-    async with mcp_toolbox(run_id, restaurant_id, SALES_TOOLS, server) as toolbox:
-        agent = _sales_agent(restaurant_id, today, client, toolbox.tools, toolbox.executor)
-        if store is None:
-            result = await agent.run(question)
-            result.run_id = run_id
-            return result
-        return await run_persisted(
-            agent,
-            store,
-            run_id,
-            restaurant_id=restaurant_id,
-            question=question,
-            today=today,
-            prompt_sha256=load_prompt("sales").sha256,
-        )
+    return await ask(
+        SALES,
+        question,
+        restaurant_id,
+        today,
+        client=client,
+        server=server,
+        run_id=run_id,
+        store=store,
+    )
 
 
 async def resume_sales(
@@ -67,38 +49,4 @@ async def resume_sales(
     client: ModelClient | None = None,
     server: MCPServer | StdioServerParameters | None = None,
 ) -> RunResult:
-    record = await store.load(run_id)
-    if record.agent != "sales":
-        raise ValueError(f"run {run_id!r} belongs to agent {record.agent!r}, not 'sales'")
-    tainted = read_untrusted(record.messages)
-    async with mcp_toolbox(
-        run_id, record.restaurant_id, SALES_TOOLS, server, tainted=tainted
-    ) as toolbox:
-        agent = _sales_agent(
-            record.restaurant_id, record.today, client, toolbox.tools, toolbox.executor
-        )
-        return await resume_persisted(
-            agent, store, record, prompt_sha256=load_prompt("sales").sha256
-        )
-
-
-def _sales_agent(
-    restaurant_id: int,
-    today: date,
-    client: ModelClient | None,
-    tools: list[ToolParam],
-    executor: ToolExecutor,
-) -> Agent:
-    settings = get_settings()
-    return Agent(
-        AgentConfig(
-            name="sales",
-            model=settings.model_strong,
-            system=sales_system_prompt(restaurant_id, today),
-            max_steps=settings.max_agent_steps,
-            tool_timeout_seconds=settings.tool_timeout_seconds,
-        ),
-        client or make_client(settings.anthropic_api_key or None),
-        tools,
-        executor,
-    )
+    return await resume(run_id, store, client=client, server=server, expected=SALES)

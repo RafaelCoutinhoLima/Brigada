@@ -1,6 +1,7 @@
-"""Ask the Sales agent from the terminal.
+"""Ask a specialist agent from the terminal.
 
 uv run python -m brigada.runtime "Quanto vendi ontem?" --restaurant 1 --today 2026-10-28
+uv run python -m brigada.runtime "Qual prato tem mais reclamações?" --agent menu --restaurant 2
 """
 
 import argparse
@@ -11,7 +12,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from brigada.config import get_settings
-from brigada.runtime.sales import ask_sales, resume_sales
+from brigada.runtime.specialists import SPECIALISTS, ask, get_specialist, resume
 from brigada.runtime.state import RunStore
 
 
@@ -20,6 +21,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m brigada.runtime")
     parser.add_argument("question", nargs="?")
     parser.add_argument("--restaurant", type=int)
+    parser.add_argument("--agent", choices=sorted(SPECIALISTS), default="sales")
     parser.add_argument("--resume", metavar="RUN_ID", help="continue a failed run")
     parser.add_argument("--no-save", action="store_true", help="do not persist the run")
     parser.add_argument(
@@ -37,12 +39,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.resume:
         if store is None:
             parser.error("--resume needs the database (drop --no-save)")
-        result = asyncio.run(resume_sales(args.resume, store))
+        result = asyncio.run(resume(args.resume, store))
     else:
         run_id = uuid.uuid4().hex
         print(f"run_id: {run_id}")
         result = asyncio.run(
-            ask_sales(args.question, args.restaurant, args.today, run_id=run_id, store=store)
+            ask(
+                get_specialist(args.agent),
+                args.question,
+                args.restaurant,
+                args.today,
+                run_id=run_id,
+                store=store,
+            )
         )
     print(result.text)
     tools = ", ".join(c.name for c in result.tools_called) or "nenhuma"

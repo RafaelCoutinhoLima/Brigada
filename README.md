@@ -74,8 +74,10 @@ uv sync
 uv run python scripts/seed_data.py --reset
 uv run pytest                 # add -m db to run tests against the database
 
-# ask the Sales agent (needs ANTHROPIC_API_KEY); every step is saved in `runs`/`steps`
+# ask a specialist (needs ANTHROPIC_API_KEY); every step is saved in `runs`/`steps`
 uv run python -m brigada.runtime "Quanto vendi ontem?" --restaurant 1 --today 2026-10-28
+uv run python -m brigada.runtime "Qual prato tem mais reclamações?" --agent menu --restaurant 2
+uv run python -m brigada.runtime "Onde as entregas atrasam?" --agent operations --restaurant 3
 uv run python -m brigada.runtime --resume <run_id>   # continue a run that failed
 ```
 

@@ -21,7 +21,7 @@
 
 | Component | Path | Responsibility |
 |-----------|------|----------------|
-| Runtime | `src/brigada/runtime` | Tool-use loop, retries, timeouts, step limits, run persistence |
+| Runtime | `src/brigada/runtime` | Tool-use loop, retries, timeouts, step limits, run persistence; specialist registry (Sales, Menu, Operations) |
 | Orchestration | `src/brigada/orchestration` | Planner, DAG executor, specialists, critic |
 | MCP server | `src/brigada/mcp_server` | Read/write tools, human confirmation, audit log |
 | RAG | `src/brigada/rag` | Indexing, hybrid retrieval, reranking |
@@ -53,7 +53,7 @@ promotions(id, restaurant_id, menu_item_id, discount_pct, start_date, end_date, 
 - Highest-impact action: write tools that change the menu or create promotions.
 - Defenses:
   - data/instruction separation: review text is returned as `untrusted_text`, and prompts state that tool results are data;
-  - least privilege per agent: each specialist only sees its own tools (Sales has no write tools);
+  - least privilege per agent: each specialist only sees its own tools (only Menu has write tools, and only Menu reads review text);
   - per-run restaurant scope, fail closed: the MCP server rejects any call without a bound scope or for another restaurant;
   - write tools only create pending actions; execution happens on a human path that is not an MCP tool;
   - once a run has read untrusted text, its write tools are disabled (also after a resume);
