@@ -89,7 +89,12 @@ async def test_sales_agent_end_to_end_with_scripted_model() -> None:
         message(text("Ontem (27/10) não entrou nenhum pedido pelo app.")),
     )
     result = await ask_sales(
-        "Quanto vendi ontem?", 1, date(2026, 10, 28), client=client, server=build_server()
+        "Quanto vendi ontem?",
+        1,
+        date(2026, 10, 28),
+        client=client,
+        server=build_server(),
+        run_id="test-e2e",
     )
     assert result.steps == 2
     tool_result = client.messages.requests[1]["messages"][-1]["content"][0]
@@ -115,7 +120,12 @@ async def test_agent_errors_come_out_unwrapped() -> None:
     ]
     with pytest.raises(MaxStepsExceeded):  # not an ExceptionGroup
         await ask_sales(
-            "q", 1, date(2026, 10, 28), client=FakeClient(*looping), server=build_server()
+            "q",
+            1,
+            date(2026, 10, 28),
+            client=FakeClient(*looping),
+            server=build_server(),
+            run_id="test-unwrap",
         )
 
 

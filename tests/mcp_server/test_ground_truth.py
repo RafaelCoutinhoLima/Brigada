@@ -85,3 +85,17 @@ async def test_late_share_matches_generator(server: BrigadaMCPServer) -> None:
     assert group["deliveries"] == len(ds)
     assert group["late_deliveries"] == late
     assert group["late_share"] == pytest.approx(late / len(ds), abs=1e-4)
+
+
+async def test_delivery_hour_buckets_use_local_time(server: BrigadaMCPServer) -> None:
+    out = await call(
+        server,
+        "delivery_times",
+        restaurant_id=3,
+        start_date=START_DATE.isoformat(),
+        end_date=END_DATE.isoformat(),
+        group_by="hour",
+    )
+    hour_of = {o.id: o.created_at.hour for o in orders(3, START_DATE, END_DATE)}
+    expected = Counter(hour_of[d.order_id] for d in dataset().deliveries if d.order_id in hour_of)
+    assert {g["hour"]: g["deliveries"] for g in out["groups"]} == dict(expected)
