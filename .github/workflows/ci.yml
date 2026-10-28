@@ -12,8 +12,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
       - run: uv sync --frozen
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -36,8 +36,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://brigada:brigada@localhost:5432/brigada
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
       - run: uv sync --frozen
       - name: Apply migrations
         run: for f in db/migrations/*.sql; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f"; done
@@ -47,7 +47,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build -t brigada:ci .
 
   # Habilitar quando o orquestrador existir: roda 15 casos de eval e falha se a acurácia cair
@@ -58,7 +58,7 @@ jobs:
   #     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
   #     DATABASE_URL: ${{ secrets.DATABASE_URL }}
   #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: astral-sh/setup-uv@v3
+  #     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+  #     - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
   #     - run: uv sync --frozen
   #     - run: uv run python -m evals.run --subset ci --fail-under-baseline 5

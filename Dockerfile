@@ -1,6 +1,6 @@
-FROM python:3.12-slim
-# Pinned: a mutable tag would let an upstream change alter every build.
-COPY --from=ghcr.io/astral-sh/uv:0.13.3 /uv /usr/local/bin/uv
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
+# Pinned by digest: a mutable tag would let an upstream change alter every build.
+COPY --from=ghcr.io/astral-sh/uv:0.13.3@sha256:bee0a2a458fd956c5df7b8b4c5fed2257b0af34866e3da7b51db0be3acb375d1 /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
