@@ -145,3 +145,34 @@ async def test_registered_tool_without_restaurant_id_fails_closed(
 
     with restaurant_context(1), pytest.raises(ToolError, match="restaurant_id is required"):
         await server.call_tool("list_menu_items", {})
+
+
+async def test_tainted_runs_keep_read_tools_and_lose_anything_not_declared_read_only(
+    db: Conn, run_id: str
+) -> None:
+    from mcp import Client
+
+    from brigada.mcp_server.audit import RESTAURANT_ID_META_KEY, RUN_ID_META_KEY, TAINTED_META_KEY
+    from brigada.mcp_server.server import build_server
+
+    server = build_server()
+
+    @server.tool()  # no annotations: must be treated as a write
+    def new_unannotated_tool(restaurant_id: int) -> str:
+        return "changed something"
+
+    meta = {RUN_ID_META_KEY: run_id, RESTAURANT_ID_META_KEY: 1, TAINTED_META_KEY: True}
+    async with Client(server) as client:
+        read = await client.call_tool("list_menu_items", {"restaurant_id": 1}, meta=meta)
+        other = await client.call_tool("new_unannotated_tool", {"restaurant_id": 1}, meta=meta)
+    assert not read.is_error
+    assert other.is_error and "customer-written text" in str(other.content)
+
+
+def test_every_read_tool_is_declared_read_only() -> None:
+    from brigada.mcp_server.server import build_server
+    from brigada.runtime.mcp_tools import WRITE_TOOLS
+
+    for tool in build_server()._tool_manager.list_tools():
+        read_only = tool.annotations is not None and tool.annotations.read_only_hint is True
+        assert read_only == (tool.name not in WRITE_TOOLS), tool.name

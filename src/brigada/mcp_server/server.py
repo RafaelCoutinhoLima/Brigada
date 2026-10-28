@@ -174,7 +174,9 @@ class BrigadaMCPServer(MCPServer[Any]):
         tool = self._tool_manager.get_tool(name)
         if tool is None or meta.get(audit.TAINTED_META_KEY) is not True:
             return
-        if tool.annotations is not None and tool.annotations.read_only_hint is False:
+        # Fail closed: only tools explicitly declared read-only stay available. A new tool
+        # registered without annotations is treated as a write.
+        if tool.annotations is None or tool.annotations.read_only_hint is not True:
             logger.warning(
                 "write %r blocked: run %s read untrusted text",
                 name,
