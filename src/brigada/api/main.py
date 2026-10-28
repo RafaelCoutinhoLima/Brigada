@@ -205,8 +205,8 @@ def get_allowed_restaurants(
         for key, restaurant_ids in settings.api_key_scopes().items():
             if hmac.compare_digest(key.encode(), x_api_key.encode()):
                 return restaurant_ids
-    # Never log the key itself: only whether one was sent and its first characters.
-    logger.warning("rejected API key (sent=%s, prefix=%r)", bool(x_api_key), (x_api_key or "")[:4])
+    # Nothing of the key itself is logged: a mistyped real key would leak part of it.
+    logger.warning("rejected API key (sent=%s, length=%d)", bool(x_api_key), len(x_api_key or ""))
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Missing or invalid X-API-Key",

@@ -237,6 +237,6 @@ def test_rejected_keys_are_logged_without_the_key(
         "/ask", json={"question": "oi", "restaurant_id": 1}, headers={"X-API-Key": "wrongkey123"}
     )
     client.post("/ask", json={"question": "oi", "restaurant_id": 3})  # valid key, other tenant
-    assert "prefix='wron'" in caplog.text
-    assert "wrongkey123" not in caplog.text
+    assert "rejected API key (sent=True, length=11)" in caplog.text
+    assert "wron" not in caplog.text
     assert "not allowed for restaurant 3" in caplog.text
