@@ -87,10 +87,19 @@ async def ask(
     server: MCPServer | StdioServerParameters | None = None,
     run_id: str | None = None,
     store: RunStore | None = None,
+    tainted: bool = False,
+    orchestration_id: str | None = None,
+    plan_step: str | None = None,
 ) -> RunResult:
-    """Answer one question. With a ``store``, every step is saved and the run is resumable."""
+    """Answer one question. With a ``store``, every step is saved and the run is resumable.
+
+    ``tainted`` starts the run with write tools disabled: the question carries text derived
+    from customer reviews (e.g. another specialist's findings), see ``mcp_tools``.
+    """
     run_id = run_id or uuid.uuid4().hex
-    async with mcp_toolbox(run_id, restaurant_id, specialist.tools, server) as toolbox:
+    async with mcp_toolbox(
+        run_id, restaurant_id, specialist.tools, server, tainted=tainted
+    ) as toolbox:
         agent = _agent(specialist, restaurant_id, today, client, toolbox.tools, toolbox.executor)
         if store is None:
             result = await agent.run(question)
@@ -104,6 +113,9 @@ async def ask(
             question=question,
             today=today,
             prompt_sha256=load_prompt(specialist.name).sha256,
+            orchestration_id=orchestration_id,
+            plan_step=plan_step,
+            tainted=tainted,
         )
 
 
@@ -120,7 +132,7 @@ async def resume(
     if expected is not None and record.agent != expected.name:
         raise ValueError(f"run {run_id!r} belongs to agent {record.agent!r}, not {expected.name!r}")
     specialist = get_specialist(record.agent)
-    tainted = read_untrusted(record.messages)
+    tainted = record.tainted or read_untrusted(record.messages)
     async with mcp_toolbox(
         run_id, record.restaurant_id, specialist.tools, server, tainted=tainted
     ) as toolbox:

@@ -35,6 +35,7 @@ class RunRecord:
     status: str
     messages: list[MessageParam]
     result: RunResult
+    tainted: bool = False
 
 
 class RunStore:
@@ -56,10 +57,14 @@ class RunStore:
         model: str,
         prompt_sha256: str,
         messages: Sequence[MessageParam],
+        orchestration_id: str | None = None,
+        plan_step: str | None = None,
+        tainted: bool = False,
     ) -> None:
         await self._execute(
             "INSERT INTO runs (id, agent, restaurant_id, question, today, model, prompt_sha256, "
-            "messages) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            "messages, orchestration_id, plan_step, tainted) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 run_id,
                 agent,
@@ -69,6 +74,9 @@ class RunStore:
                 model,
                 prompt_sha256,
                 Jsonb(list(messages)),
+                orchestration_id,
+                plan_step,
+                tainted,
             ),
         )
 
@@ -160,6 +168,7 @@ class RunStore:
             row["status"],
             messages,
             result,
+            row["tainted"],
         )
 
 
@@ -217,8 +226,15 @@ async def run_persisted(
     question: str,
     today: date,
     prompt_sha256: str,
+    orchestration_id: str | None = None,
+    plan_step: str | None = None,
+    tainted: bool = False,
 ) -> RunResult:
-    """Run ``agent`` from scratch, saving every step under ``run_id``."""
+    """Run ``agent`` from scratch, saving every step under ``run_id``.
+
+    ``orchestration_id`` and ``plan_step`` tie the run to the orchestration that started it;
+    ``tainted`` records that it started with write tools disabled.
+    """
     messages: list[MessageParam] = [{"role": "user", "content": question}]
     await store.create(
         run_id,
@@ -229,6 +245,9 @@ async def run_persisted(
         model=agent.config.model,
         prompt_sha256=prompt_sha256,
         messages=messages,
+        orchestration_id=orchestration_id,
+        plan_step=plan_step,
+        tainted=tainted,
     )
     return await _drive(agent, store, run_id, messages, RunResult(text="", steps=0))
 

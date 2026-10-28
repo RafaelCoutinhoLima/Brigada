@@ -39,7 +39,7 @@
   }
   @keyframes flicker { 0%, 100% { opacity: 1; } 47% { opacity: .92; } 48% { opacity: 1; } }
 
-  .app { display: grid; grid-template-rows: auto auto 1fr auto auto; height: 100vh; gap: 10px; padding: 12px 16px; }
+  .app { display: grid; grid-template-rows: auto auto auto 1fr auto auto; height: 100vh; gap: 10px; padding: 12px 16px; }
   .glow { text-shadow: 0 0 6px rgba(57,255,122,.55); }
 
   header { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
@@ -91,9 +91,30 @@
   .pane-foot { display: flex; gap: 12px; flex-wrap: wrap; padding: 5px 10px; border-top: 1px solid var(--line); color: var(--green-dim); font-size: 11px; }
   .pane-foot b { color: var(--green); font-weight: 400; }
 
-  .history { border: 1px solid var(--line); max-height: 104px; overflow-y: auto; padding: 4px 10px; font-size: 12px; color: var(--green-dim); }
+  .history { border: 1px solid var(--line); max-height: 76px; overflow-y: auto; padding: 4px 10px; font-size: 12px; color: var(--green-dim); }
   .history div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
   .history .ok { color: var(--green); } .history .run { color: var(--amber); } .history .bad { color: var(--red); }
+
+  .orch { border: 1px solid var(--line); background: var(--panel); display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); min-height: 0; }
+  .orch.running { border-color: var(--amber); box-shadow: 0 0 18px rgba(255,176,0,.10) inset; }
+  .orch-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  .orch-head .pane-title { color: var(--amber); text-shadow: 0 0 6px rgba(255,176,0,.5); }
+  .orch-meta { color: var(--green-dim); font-size: 11px; }
+  .pipeline { display: flex; gap: 4px; flex-wrap: wrap; font-size: 11px; letter-spacing: 1px; }
+  .pipeline span { padding: 1px 6px; border: 1px solid var(--line); color: var(--green-faint); }
+  .pipeline span.done { color: var(--green); border-color: var(--green-dim); }
+  .pipeline span.now { color: var(--bg); background: var(--amber); border-color: var(--amber); animation: blink 1s steps(2) infinite; }
+  .pipeline span.bad { color: var(--red); border-color: var(--red); }
+  .plan, .verdict { padding: 6px 10px; height: 132px; overflow-y: auto; font-size: 12px; }
+  .verdict { border-left: 1px dashed var(--line); }
+  .pstep { display: grid; grid-template-columns: 34px 92px 92px 1fr; gap: 8px; white-space: nowrap; }
+  .pstep .task { overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .pstep .id { color: var(--amber); }
+  .pstep .who { color: var(--cyan); }
+  .st-pending { color: var(--green-faint); } .st-running { color: var(--amber); } .st-succeeded { color: var(--green); }
+  .st-failed { color: var(--red); } .st-skipped { color: var(--green-faint); text-decoration: line-through; }
+  .verdict .ok { color: var(--green); } .verdict .bad { color: var(--red); } .verdict .ans { color: var(--text); white-space: pre-wrap; margin-top: 4px; }
+  .muted { color: var(--green-dim); }
 
   .cmd { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border: 1px solid var(--green-dim); padding: 8px 10px; background: #020503; box-shadow: 0 0 14px rgba(57,255,122,.08); }
   .prompt { color: var(--green); white-space: nowrap; }
@@ -107,6 +128,9 @@
     body { overflow: auto; }
     .app { height: auto; min-height: 100vh; }
     .panes { grid-template-columns: 1fr; }
+    .orch { grid-template-columns: 1fr; }
+    .verdict { border-left: none; border-top: 1px dashed var(--line); }
+    .pstep { grid-template-columns: 30px 80px 1fr; } .pstep .who { display: none; }
     .pane { height: 380px; }
   }
 </style>
@@ -133,6 +157,18 @@
     <span class="flash" id="flash"></span>
   </div>
 
+  <section class="orch" id="orch">
+    <div class="orch-head">
+      <span class="pane-title">[ ORQUESTRADOR ]</span>
+      <span class="badge idle" id="o-badge">IDLE</span>
+      <div class="pipeline" id="o-pipe"></div>
+      <div class="spacer"></div>
+      <span class="orch-meta" id="o-meta">sem orquestração ainda</span>
+    </div>
+    <div class="plan" id="o-plan"><div class="muted">// o plano do planner aparece aqui: passos, especialistas e dependências</div></div>
+    <div class="verdict" id="o-verdict"><div class="muted">// revisão do critic e resposta final</div></div>
+  </section>
+
   <main class="panes" id="panes"></main>
 
   <div class="history" id="history"><div>// histórico de execuções aparece aqui</div></div>
@@ -140,6 +176,7 @@
   <form class="cmd" id="cmd" autocomplete="off">
     <span class="prompt">dono@brigada<span>:</span>~$</span>
     <input id="question" placeholder="pergunte algo aos agentes… ex.: Por que minhas vendas caíram na última terça?" maxlength="1000">
+    <div class="toggles"><button type="button" id="orch-toggle" class="active" title="o planner escolhe os especialistas">ORQUESTRADOR</button></div>
     <div class="toggles" id="toggles"></div>
     <button type="submit">executar ⏎</button>
   </form>
@@ -229,7 +266,75 @@
   const fmtCost = (v) => Number(v || 0).toFixed(4);
   const clip = (s, n) => (s.length > n ? s.slice(0, n) + " …" : s);
 
+  const LABEL = Object.fromEntries(AGENTS.map(a => [a.name, a.label]));
+  const STAGES = ["PLANEJAR", "EXECUTAR", "SINTETIZAR", "REVISAR", "RESPOSTA"];
+  const MARK = { pending: "·", running: "▶", succeeded: "✔", failed: "✖", skipped: "↷" };
+  const WORD = { pending: "aguarda", running: "executa", succeeded: "ok", failed: "falhou", skipped: "pulado" };
+
+  function stage(o) {
+    if (o.status === "succeeded") return STAGES.length;
+    if (!o.steps.length && !o.direct_answer) return 0;
+    if (o.steps.some(s => s.status === "running" || s.status === "pending")) return 1;
+    const running = o.roles.find(r => r.status === "running");
+    if (running) return running.plan_step.startsWith("synthesis") ? 2 : running.plan_step.startsWith("review") ? 3 : 0;
+    const last = o.roles[o.roles.length - 1];
+    return last && last.plan_step.startsWith("synthesis") ? 3 : 2;
+  }
+
+  function div(cls, text) { const d = document.createElement("div"); if (cls) d.className = cls; if (text != null) d.textContent = text; return d; }
+  function span(cls, text) { const d = document.createElement("span"); d.className = cls; d.textContent = text; return d; }
+
+  function renderOrch(o) {
+    const box = $("orch"), badge = $("o-badge");
+    box.classList.toggle("running", o.status === "running");
+    badge.className = "badge " + o.status;
+    badge.textContent = { running: "EXECUTANDO", succeeded: "CONCLUÍDO", failed: "FALHOU" }[o.status] || o.status;
+    $("o-meta").textContent = `${o.id.slice(0, 8)} · rodada extra: ${o.rounds ? "sim" : "não"} · ${(o.tokens_in + o.tokens_out).toLocaleString("pt-BR")} tok · US$ ${fmtCost(o.cost_usd)} · ${hhmmss(o.started_at)}`;
+
+    const now = stage(o), pipe = $("o-pipe");
+    pipe.textContent = "";
+    STAGES.forEach((name, i) => {
+      const cls = i < now ? "done" : i === now ? (o.status === "failed" ? "bad" : "now") : "";
+      pipe.appendChild(span(cls, name));
+      if (i < STAGES.length - 1) pipe.appendChild(span("", "▸")).className = "muted";
+    });
+
+    const plan = $("o-plan");
+    plan.textContent = "";
+    plan.appendChild(div("q", `$ ${o.question}`));
+    if (o.direct_answer) plan.appendChild(div("muted", "// sem passos: o planner respondeu direto"));
+    else if (!o.steps.length) plan.appendChild(div("muted cursor", "planejando"));
+    for (const st of o.steps) {
+      const row = div("pstep");
+      row.appendChild(span("id", st.id));
+      row.appendChild(span("st-" + st.status, `${MARK[st.status]} ${WORD[st.status]}`));
+      row.appendChild(span("who", LABEL[st.specialist] || st.specialist));
+      const deps = st.depends_on.length ? `← ${st.depends_on.join(",")}  ` : "";
+      row.appendChild(span("task", `${st.extra ? "[extra] " : ""}${deps}${st.task}`));
+      row.title = st.task;
+      plan.appendChild(row);
+    }
+
+    const v = $("o-verdict");
+    v.textContent = "";
+    const chain = div("muted");
+    o.roles.forEach((r, i) => {
+      const name = r.plan_step === "plan" ? "PLANNER" : r.plan_step.replace("synthesis-", "SÍNTESE ").replace("review-", "REVISÃO ");
+      if (i) chain.appendChild(span("muted", " ▸ "));
+      chain.appendChild(span("st-" + r.status, `${MARK[r.status] || "·"} ${name}`));
+    });
+    v.appendChild(chain);
+    const final = o.answer || o.direct_answer;
+    if (o.status === "succeeded" && final) v.appendChild(div("ans", final));
+    o.reviews.forEach((rv, i) => {
+      v.appendChild(div(rv.approved ? "ok" : "bad", `${rv.approved ? "✔" : "✖"} revisão ${i + 1}: ${rv.approved ? "aprovada" : "reprovada"}`));
+      for (const issue of rv.issues || []) v.appendChild(div("bad", `   - ${issue}`));
+    });
+    if (o.status === "failed") v.appendChild(div("bad", `✖ FALHOU: ${o.error_type || "erro"}`));
+  }
+
   function render(state) {
+    if (state.orchestrations && state.orchestrations.length) renderOrch(state.orchestrations[0]);
     const latest = {};
     for (const r of state.runs) if (!latest[r.agent]) latest[r.agent] = r;  // runs come newest first
 
@@ -242,7 +347,14 @@
         p.runId = run.id; p.shown = 0; p.final = false;
         p.log.textContent = ""; p.queue = [];
         line(a.name, "sys", `── run ${run.id.slice(0, 8)} · ${run.model} ──`, true);
-        line(a.name, "q", `$ ${run.question}`, false, hhmmss(run.started_at));
+        // An orchestrated step's question also carries the owner's question and upstream
+        // findings: show the task, and say what context came with it.
+        const [task, ...context] = run.question.split("\n\n");
+        line(a.name, "q", `$ ${task}`, false, hhmmss(run.started_at));
+        if (run.plan_step) {
+          const from = [...run.question.matchAll(/<achado passo="(s\d+)"/g)].map(m => m[1]);
+          line(a.name, "sys", `  passo ${run.plan_step} da orquestração ${run.orchestration_id.slice(0, 8)}${from.length ? ` · recebeu achados de ${from.join(", ")}` : ""}`, true);
+        } else if (context.length) line(a.name, "sys", "  (+ contexto)", true);
       }
       for (; p.shown < run.events.length; p.shown++) {
         const ev = run.events[p.shown];
@@ -281,7 +393,7 @@
       const d = document.createElement("div");
       d.className = { running: "run", succeeded: "ok", failed: "bad" }[r.status] || "";
       const mark = { running: "▶", succeeded: "✔", failed: "✖" }[r.status] || "·";
-      d.textContent = `${mark} ${hhmmss(r.started_at)}  ${r.agent.padEnd(10)} ${r.id.slice(0, 8)}  ${r.steps} steps  US$ ${fmtCost(r.cost_usd)}  “${r.question}”`;
+      d.textContent = `${mark} ${hhmmss(r.started_at)}  ${r.agent.padEnd(10)} ${r.id.slice(0, 8)}  ${r.steps} steps  US$ ${fmtCost(r.cost_usd)}  “${r.question.split("\n")[0]}”`;
       h.appendChild(d);
     }
     if (!state.runs.length) h.innerHTML = "<div>// nenhuma execução para este restaurante ainda</div>";
@@ -328,6 +440,14 @@
     poll(); timer = setInterval(poll, POLL_MS);
   }
 
+  let viaOrch = true;
+  $("orch-toggle").onclick = () => {
+    viaOrch = !viaOrch;
+    $("orch-toggle").classList.toggle("active", viaOrch);
+    $("toggles").style.opacity = viaOrch ? ".35" : "1";
+  };
+  $("toggles").style.opacity = ".35";
+
   $("connect").onclick = connect;
   $("restaurant").onchange = () => { if (timer) connect(); };
 
@@ -336,14 +456,18 @@
     const question = $("question").value.trim();
     if (!question) return;
     const agents = AGENTS.map(a => a.name).filter(n => enabled.has(n));
-    if (!agents.length) { flash("selecione ao menos um agente"); return; }
-    if (demo) { runDemo(question, agents); $("question").value = ""; return; }
+    if (!viaOrch && !agents.length) { flash("selecione ao menos um agente"); return; }
+    if (demo) { viaOrch ? demoOrchestration(question) : runDemo(question, agents); $("question").value = ""; return; }
     if (!timer) connect();
     try {
-      const body = { question, restaurant_id: restaurant(), agents };
+      const body = viaOrch
+        ? { question, restaurant_id: restaurant(), orchestrate: true }
+        : { question, restaurant_id: restaurant(), agents };
       if ($("today").value) body.today = $("today").value;
       const out = await api("/console/dispatch", { method: "POST", body: JSON.stringify(body) });
-      flash(`despachado → ${out.runs.map(r => `${r.agent}:${r.run_id.slice(0, 8)}`).join("  ")}`);
+      flash(out.orchestration_id
+        ? `orquestração ${out.orchestration_id.slice(0, 8)} iniciada`
+        : `despachado → ${out.runs.map(r => `${r.agent}:${r.run_id.slice(0, 8)}`).join("  ")}`);
       $("question").value = "";
     } catch (err) {
       flash(`falha ao despachar: ${err.message}`);
@@ -374,10 +498,51 @@
       ["answer", "Entregas na terça dentro do prometido (razão 1,02). A operação não foi o gargalo: o volume caiu por falta de pedidos no app, não por atraso."],
     ],
   };
-  const demoState = { runs: [] };
+  const demoState = { runs: [], orchestrations: [] };
+  const now = () => new Date().toISOString();
+  const later = (ms, fn) => setTimeout(() => { if (demo) fn(); }, ms);
 
-  function runDemo(question, agents) {
-    const now = () => new Date().toISOString();
+  // Planner -> three specialists in parallel -> synthesis -> review, on the same timeline.
+  function demoOrchestration(question) {
+    const o = { id: Math.random().toString(16).slice(2).padEnd(32, "0"), question, status: "running", rounds: 0, direct_answer: null,
+      steps: [], roles: [{ plan_step: "plan", agent: "planner", status: "running" }], reviews: [], answer: null, error_type: null,
+      tokens_in: 0, tokens_out: 0, cost_usd: 0, started_at: now(), finished_at: null };
+    demoState.orchestrations.unshift(o);
+    const spend = (tin, tout) => { o.tokens_in += tin; o.tokens_out += tout; o.cost_usd += (tin * 3 + tout * 15) / 1e6; };
+    render(demoState);
+    later(1400, () => {
+      o.roles[0].status = "succeeded"; spend(1300, 160);
+      o.steps = [
+        { id: "s1", specialist: "sales", task: "Compare o faturamento da última terça com as terças anteriores, por canal.", depends_on: [], extra: false, status: "running" },
+        { id: "s2", specialist: "operations", task: "Veja se as entregas da última terça atrasaram mais que o normal.", depends_on: [], extra: false, status: "running" },
+        { id: "s3", specialist: "menu", task: "Verifique se há reclamações recentes que expliquem a queda.", depends_on: [], extra: false, status: "running" },
+      ];
+      let left = o.steps.length;
+      for (const st of o.steps) {
+        runDemo(st.task, [st.specialist], (run) => {
+          st.status = "succeeded"; spend(run.tokens_in, run.tokens_out);
+          if (--left) return render(demoState);
+          o.roles.push({ plan_step: "synthesis-1", agent: "synthesizer", status: "running" });
+          render(demoState);
+          later(1800, () => {
+            o.roles[1].status = "succeeded"; spend(2100, 260);
+            o.roles.push({ plan_step: "review-1", agent: "critic", status: "running" });
+            render(demoState);
+            later(1500, () => {
+              o.roles[2].status = "succeeded"; spend(1900, 90);
+              o.reviews.push({ approved: true, issues: [], extra_steps: [] });
+              o.status = "succeeded"; o.finished_at = now();
+              o.answer = "Sua venda caiu por causa do app: na terça (27/10) o canal app teve zero pedidos, e o faturamento foi R$ 2.496,60 contra R$ 6.120,40 nas terças anteriores. Entregas (razão 1,02) e cardápio (6 avaliações negativas) não explicam a queda. Verifique o que derrubou o app nesse dia.";
+              render(demoState);
+            });
+          });
+        });
+      }
+      render(demoState);
+    });
+  }
+
+  function runDemo(question, agents, onDone) {
     for (const name of agents) {
       const run = { id: Math.random().toString(16).slice(2).padEnd(32, "0"), agent: name, question, status: "running", model: "claude-sonnet-4-6",
         steps: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, answer: null, error_type: null, started_at: now(), finished_at: null, events: [] };
@@ -388,6 +553,7 @@
         if (!s || !demo) return;
         run.steps += s[0] === "result" ? 0 : 1;
         if (s[0] === "answer") { run.status = "succeeded"; run.answer = s[1]; run.finished_at = now(); }
+        if (s[0] === "answer" && onDone) { render(demoState); onDone(run); return; }
         else run.events.push({ step: run.steps, kind: s[0], tool: s[1], text: s[2], at: now(), is_error: false, size: s[2].length, latency_ms: s[0] === "call" ? 600 + Math.floor(Math.random() * 900) : null });
         if (s[0] !== "result") { run.tokens_in += 900 + Math.floor(Math.random() * 400); run.tokens_out += 80 + Math.floor(Math.random() * 120); run.cost_usd = (run.tokens_in * 3 + run.tokens_out * 15) / 1e6; }
         render(demoState);
@@ -402,8 +568,8 @@
     demo = true; $("demo").classList.add("active");
     setLink("on", "MODO DEMO · dados simulados");
     for (const a of AGENTS) { panes[a.name].runId = null; bootPane(a.name); }
-    demoState.runs = [];
-    runDemo("Por que minhas vendas caíram na última terça?", AGENTS.map(a => a.name));
+    demoState.runs = []; demoState.orchestrations = [];
+    demoOrchestration("Por que minhas vendas caíram na última terça?");
   }
   function stopDemo() { demo = null; $("demo").classList.remove("active"); }
   $("demo").onclick = () => (demo ? (stopDemo(), setLink("", "OFFLINE")) : startDemo());

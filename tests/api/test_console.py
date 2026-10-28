@@ -3,6 +3,7 @@ import os
 import uuid
 from collections.abc import Iterator
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import anthropic
@@ -16,6 +17,7 @@ from brigada.api import console
 from brigada.api.main import app
 from brigada.config import Settings, get_settings
 from brigada.mcp_server.server import build_server
+from brigada.orchestration.store import OrchestrationStore
 from brigada.runtime.specialists import SALES, ask
 from brigada.runtime.state import RunStore
 from tests.runtime.fakes import FakeClient, message, text, tool_use
@@ -159,3 +161,92 @@ async def test_runs_show_each_step_and_hide_error_details(client: TestClient) ->
     finally:
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
             conn.execute("DELETE FROM runs WHERE id = ANY(%s)", ([ok, bad],))
+
+
+def test_dispatch_through_the_orchestrator(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started: list[dict[str, Any]] = []
+
+    async def fake_orchestrate(question: str, rid: int, today: date, **kw: Any) -> None:
+        started.append({"question": question, "rid": rid, "today": today, **kw})
+
+    monkeypatch.setattr(console, "orchestrate", fake_orchestrate)
+    body = {
+        "question": "Por que caiu?",
+        "restaurant_id": 1,
+        "orchestrate": True,
+        "today": "2026-10-28",
+    }
+    resp = client.post("/console/dispatch", json=body)
+    assert resp.status_code == 202
+    out = resp.json()
+    assert out["runs"] == [] and len(out["orchestration_id"]) == 32
+    client.get("/health")
+    assert started[0]["orchestration_id"] == out["orchestration_id"]
+    assert (started[0]["rid"], started[0]["today"]) == (1, TODAY)
+
+
+@pytest.mark.db
+async def test_runs_show_the_latest_orchestration_with_step_status(client: TestClient) -> None:
+    url = os.environ["DATABASE_URL"]
+    oid = f"test-{uuid.uuid4().hex}"
+    store = OrchestrationStore(url)
+    await store.create(oid, restaurant_id=1, question="Por que caiu?", today=TODAY)
+    plan = {
+        "steps": [
+            {"id": "s1", "specialist": "sales", "task": "vendas", "depends_on": []},
+            {"id": "s2", "specialist": "menu", "task": "cardápio", "depends_on": ["s1"]},
+        ],
+        "direct_answer": None,
+    }
+    reviews = [
+        {
+            "approved": False,
+            "issues": ["falta X"],
+            "extra_steps": [
+                {"id": "s3", "specialist": "operations", "task": "entregas", "depends_on": []}
+            ],
+        }
+    ]
+    await store.update(oid, plan=plan, review=reviews, rounds=1)
+    runs = RunStore(url)
+    for rid, agent, step in [
+        ("a", "planner", "plan"),
+        ("b", "sales", "s1"),
+        ("c", "critic", "review-1"),
+    ]:
+        await runs.create(
+            f"{oid}-{rid}",
+            agent=agent,
+            restaurant_id=1,
+            question="q",
+            today=TODAY,
+            model="m",
+            prompt_sha256="x",
+            messages=[],
+            orchestration_id=oid,
+            plan_step=step,
+        )
+        await runs.succeed(f"{oid}-{rid}", "ok")
+    try:
+        state = client.get("/console/runs?restaurant_id=1").json()
+        o = state["orchestrations"][0]
+        assert o["id"] == oid and o["status"] == "running"
+        assert [(s["id"], s["status"], s["extra"]) for s in o["steps"]] == [
+            ("s1", "succeeded", False),
+            ("s2", "pending", False),
+            ("s3", "pending", True),
+        ]
+        assert [r["plan_step"] for r in o["roles"]] == ["plan", "review-1"]
+        assert o["reviews"][0]["issues"] == ["falta X"]
+        await store.fail(
+            oid, RuntimeError("secret detail"), tokens_in=1, tokens_out=1, cost_usd=Decimal(0)
+        )
+        o = client.get("/console/runs?restaurant_id=1").json()["orchestrations"][0]
+        assert o["error_type"] == "RuntimeError"
+        assert [s["status"] for s in o["steps"]] == ["succeeded", "skipped", "skipped"]
+        assert "secret" not in str(o)
+    finally:
+        with psycopg.connect(url) as conn:
+            conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
