@@ -105,7 +105,8 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
         "weekday_names": [WEEKDAY_NAMES[i] for i in range(1, 8)],
     }
     totals = conn.execute(
-        "SELECT count(*) AS orders, coalesce(sum(total), 0) AS revenue FROM orders "
+        "SELECT count(*) AS orders, coalesce(sum(total), 0) AS revenue, "
+        "count(DISTINCT (created_at AT TIME ZONE %(tz)s)::date) AS days FROM orders "
         "WHERE restaurant_id = %(rid)s AND created_at >= %(lo)s AND created_at < %(hi)s",
         params,
     ).fetchone()
@@ -116,10 +117,12 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
         order = "keys.ord" if inp.group_by == "channel" else "keys.k"
         query = sql.SQL(
             "WITH keys AS ({keys}), "
-            "o AS (SELECT {bucket} AS k, total FROM orders "
+            "o AS (SELECT {bucket} AS k, total, (created_at AT TIME ZONE %(tz)s)::date AS d "
+            "      FROM orders "
             "      WHERE restaurant_id = %(rid)s AND created_at >= %(lo)s "
             "        AND created_at < %(hi)s) "
-            "SELECT keys.label, count(o.total) AS orders, coalesce(sum(o.total), 0) AS revenue "
+            "SELECT keys.label, count(o.total) AS orders, coalesce(sum(o.total), 0) AS revenue, "
+            "       count(DISTINCT o.d) AS days "
             "FROM keys LEFT JOIN o ON o.k = keys.k "
             "GROUP BY keys.k, keys.label{extra_group} ORDER BY {order}"
         ).format(
@@ -129,7 +132,12 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
             order=sql.SQL(order),
         )
         groups = [
-            SalesGroup(key=r["label"], orders=r["orders"], revenue=_money(r["revenue"]))
+            SalesGroup(
+                key=r["label"],
+                orders=r["orders"],
+                revenue=_money(r["revenue"]),
+                days_with_orders=r["days"],
+            )
             for r in conn.execute(query, params).fetchall()
         ]
 
@@ -142,6 +150,7 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
         group_by=inp.group_by,
         total_orders=n_orders,
         total_revenue=revenue,
+        days_with_orders=totals["days"],
         average_ticket=round(revenue / n_orders, 2) if n_orders else None,
         groups=groups,
     )

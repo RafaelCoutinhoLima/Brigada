@@ -163,6 +163,10 @@ class SalesGroup(_Output):
     )
     orders: int
     revenue: float
+    days_with_orders: int = Field(
+        description="Distinct local days in this group with at least one order: divide by this "
+        "for a per-day average, not by calendar days (the history may be shorter)."
+    )
 
 
 class SalesByPeriodResult(_Output):
@@ -173,6 +177,9 @@ class SalesByPeriodResult(_Output):
     total_orders: int
     total_revenue: float
     average_ticket: float | None = Field(description="total_revenue / total_orders; null if 0.")
+    days_with_orders: int = Field(
+        description="Distinct local days in the period with at least one order."
+    )
     groups: list[SalesGroup] = Field(
         description="Zero-filled: every day/channel/hour/weekday appears, even with 0 orders. "
         "Empty when group_by is 'none'."

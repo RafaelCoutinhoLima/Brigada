@@ -119,3 +119,24 @@ async def test_ratings_by_item_answers_the_eval_question(server: BrigadaMCPServe
     out = await call(server, "ratings_by_item", restaurant_id=3, min_reviews=5)
     assert out["items"][0]["name"] == "Missoshiru"
     assert all(i["reviews"] >= 5 for i in out["items"])
+
+
+async def test_days_with_orders_count_real_days_not_calendar(server: BrigadaMCPServer) -> None:
+    # A 6-month window over a 90-day history: averages must use the days that have data.
+    out = await call(
+        server,
+        "sales_by_period",
+        restaurant_id=1,
+        start_date="2026-05-01",
+        end_date=END_DATE.isoformat(),
+        group_by="weekday",
+    )
+    tuesdays = {
+        o.created_at.date()
+        for o in orders(1, START_DATE, END_DATE)
+        if o.created_at.isoweekday() == 2
+    }
+    group = next(g for g in out["groups"] if g["key"] == "tuesday")
+    assert group["days_with_orders"] == len(tuesdays) < 26  # not the 26 calendar Tuesdays
+    all_days = {o.created_at.date() for o in orders(1, START_DATE, END_DATE)}
+    assert out["days_with_orders"] == len(all_days)
