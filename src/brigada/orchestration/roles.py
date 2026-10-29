@@ -23,6 +23,9 @@ from brigada.runtime.types import ToolCall
 from .plan import Plan, Review, check_graph, tool_schema
 
 SUBMIT_PLAN = "submit_plan"
+# Reasoning models spend output tokens thinking before they write: 2000 was not enough for the
+# critic to reach its submit_review call (it ended in max_tokens with no content).
+STRUCTURED_MAX_TOKENS = 8000
 SUBMIT_REVIEW = "submit_review"
 _WEEKDAYS = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
 
@@ -82,7 +85,7 @@ def synthesizer(client: ModelClient, restaurant_id: int, today: date) -> Role:
             model=settings.model_strong,
             system=_with_context(prefix, restaurant_id, today),
             max_steps=1,
-            max_tokens=2000,
+            max_tokens=STRUCTURED_MAX_TOKENS,
         ),
         client,
         [],
@@ -117,7 +120,7 @@ def _structured[M: BaseModel](
             model=model,
             system=_with_context(prefix, restaurant_id, today),
             max_steps=3,
-            max_tokens=2000,
+            max_tokens=STRUCTURED_MAX_TOKENS,
             terminal_tools=frozenset({tool}),
             tool_choice={"type": "tool", "name": tool},
         ),
