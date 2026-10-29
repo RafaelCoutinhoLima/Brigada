@@ -759,6 +759,12 @@
   const params = new URLSearchParams(location.search);
   if (params.has("demo")) startDemo();
   else if ($("key").value) connect();
+  else {
+    // On this machine the server can hand over the local key (CONSOLE_LOCAL_KEY): connect by itself.
+    fetch("/console/local-session").then(r => (r.ok ? r.json() : null)).then(s => {
+      if (s && s.key && !$("key").value && !demo) { $("key").value = s.key; connect(); }
+    }).catch(() => {});
+  }
   $("question").focus({ preventScroll: true });
 })();
 </script>

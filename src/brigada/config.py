@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     timezone: str = "America/Sao_Paulo"
     # "key1=1,2;key2=3": each API key and the restaurant ids it may query. Empty = /ask rejects all.
     api_keys: str = ""
+    # Local development only: the console fetches this key by itself when opened from this
+    # machine (127.0.0.1, no proxy). Must be one of API_KEYS. Empty = off (the default).
+    console_local_key: str = ""
 
     @property
     def model_api_key(self) -> str:
