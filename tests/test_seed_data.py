@@ -327,6 +327,15 @@ def test_load_into_database(ds: Dataset) -> None:
         "deliveries": len(ds.deliveries),
         "reviews": len(ds.reviews),
     }
+    from scripts.seed_inventory import generate_inventory
+
+    inv = generate_inventory(ds)
+    expected |= {
+        "ingredients": len(inv.ingredients),
+        "recipes": len(inv.recipes),
+        "stock_movements": len(inv.movements),
+        "stock_counts": len(inv.counts),
+    }
     assert written == expected
     with psycopg.connect(url) as conn, conn.cursor() as cur:
         for table, n in expected.items():

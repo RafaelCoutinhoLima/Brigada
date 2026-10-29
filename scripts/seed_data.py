@@ -35,6 +35,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -704,6 +705,10 @@ TABLES_IN_LOAD_ORDER: tuple[str, ...] = (
     "order_items",
     "deliveries",
     "reviews",
+    "ingredients",
+    "recipes",
+    "stock_movements",
+    "stock_counts",
 )
 
 
@@ -768,7 +773,15 @@ def load(dataset: Dataset, database_url: str, reset: bool) -> dict[str, int]:
                         "table 'restaurants' already has rows; rerun with --reset to "
                         "truncate all seed tables first"
                     )
-            for table, (columns, rows) in _rows(dataset).items():
+            # Run as `python scripts/seed_data.py`, the repo root is not on sys.path.
+            root = str(Path(__file__).resolve().parents[1])
+            if root not in sys.path:
+                sys.path.insert(0, root)
+            from scripts.seed_inventory import generate_inventory
+            from scripts.seed_inventory import rows as inventory_rows
+
+            tables = {**_rows(dataset), **inventory_rows(generate_inventory(dataset))}
+            for table, (columns, rows) in tables.items():
                 stmt = sql.SQL("COPY {} ({}) FROM STDIN").format(
                     sql.Identifier(table),
                     sql.SQL(", ").join(sql.Identifier(c) for c in columns),
