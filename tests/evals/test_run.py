@@ -228,3 +228,12 @@ async def test_runtime_run_result_is_accepted_with_tool_args() -> None:
     assert answer.tools_called[0].name == "sales_by_period"
     assert answer.tools_called[0].args == {"restaurant_id": 1}
     assert answer.run_id == "r1" and answer.cost_usd == 0.01
+
+
+async def test_commit_is_recorded_before_the_cases_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evals import run as run_module
+
+    commits = iter(["at-start", "at-end"])
+    monkeypatch.setattr(run_module, "git_commit", lambda: next(commits))
+    report = await evaluate("evals.oracle:answer", subset="ci", answerer=oracle.answer)
+    assert report.meta.git_commit == "at-start"
