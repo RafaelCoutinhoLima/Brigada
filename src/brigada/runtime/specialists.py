@@ -41,6 +41,7 @@ MENU = Specialist(
     tools=(
         "list_menu_items",
         "top_items",
+        "ratings_by_item",
         "reviews_for_item",
         "pause_menu_item",
         "create_promotion",

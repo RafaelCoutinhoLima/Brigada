@@ -28,6 +28,7 @@ TopItemsOrderBy = Literal["revenue", "qty"]
 TopItemsLimit = Annotated[int, Field(ge=1, le=50)]
 ReviewsLimit = Annotated[int, Field(ge=1, le=200)]
 Rating = Annotated[int, Field(ge=1, le=5)]
+MinReviews = Annotated[int, Field(ge=1, le=1000)]
 DiscountPct = Annotated[int, Field(ge=1, le=50, description="Discount in percent, 1 to 50.")]
 Reason = Annotated[
     str,
@@ -102,6 +103,18 @@ class ReviewsForItemInput(_Input):
     end_date: date | None = None
     max_rating: Rating | None = None
     limit: ReviewsLimit = 50
+
+    @model_validator(mode="after")
+    def _valid_range(self) -> Self:
+        _check_range(self.start_date, self.end_date)
+        return self
+
+
+class RatingsByItemInput(_Input):
+    restaurant_id: RestaurantId
+    start_date: date | None = None
+    end_date: date | None = None
+    min_reviews: MinReviews = 1
 
     @model_validator(mode="after")
     def _valid_range(self) -> Self:
@@ -219,6 +232,22 @@ class ReviewsForItemResult(_Output):
     mean_rating: float | None = Field(description="Mean over all matching reviews; null if 0.")
     returned: int = Field(description="Number of reviews included below (most recent first).")
     reviews: list[Review]
+
+
+class ItemRating(_Output):
+    menu_item_id: int
+    name: str
+    category: str
+    reviews: int
+    mean_rating: float
+
+
+class RatingsByItemResult(_Output):
+    restaurant_id: int
+    min_reviews: int
+    items: list[ItemRating] = Field(
+        description="Items with at least min_reviews reviews, best mean rating first."
+    )
 
 
 class DeliveryGroup(_Output):

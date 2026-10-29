@@ -18,9 +18,12 @@ from brigada.mcp_server.models import (
     DeliveryGroup,
     DeliveryTimesInput,
     DeliveryTimesResult,
+    ItemRating,
     ListMenuItemsInput,
     ListMenuItemsResult,
     MenuItem,
+    RatingsByItemInput,
+    RatingsByItemResult,
     Review,
     ReviewsForItemInput,
     ReviewsForItemResult,
@@ -220,7 +223,44 @@ def list_menu_items(conn: Conn, inp: ListMenuItemsInput) -> ListMenuItemsResult:
 # reviews_for_item
 # --------------------------------------------------------------------------------------
 
+
 # NULL-tolerant filters: a NULL parameter disables its condition.
+def ratings_by_item(conn: Conn, inp: RatingsByItemInput) -> RatingsByItemResult:
+    """Review count and mean rating per menu item in one query (best first).
+
+    Joined on restaurant *and* item id, so a review can never surface another restaurant's
+    item. Only numbers and menu names come back: no customer text, nothing untrusted.
+    """
+    ensure_restaurant(conn, inp.restaurant_id)
+    lo = local_day_bounds(inp.start_date, inp.start_date)[0] if inp.start_date else None
+    hi = local_day_bounds(inp.end_date, inp.end_date)[1] if inp.end_date else None
+    rows = conn.execute(
+        "SELECT m.id, m.name, m.category, count(*) AS n, avg(r.rating) AS mean "
+        "FROM reviews r JOIN menu_items m "
+        "  ON m.id = r.menu_item_id AND m.restaurant_id = r.restaurant_id "
+        "WHERE r.restaurant_id = %(rid)s "
+        "AND (%(lo)s::timestamptz IS NULL OR r.created_at >= %(lo)s::timestamptz) "
+        "AND (%(hi)s::timestamptz IS NULL OR r.created_at < %(hi)s::timestamptz) "
+        "GROUP BY m.id, m.name, m.category HAVING count(*) >= %(min)s "
+        "ORDER BY avg(r.rating) DESC, count(*) DESC, m.id",
+        {"rid": inp.restaurant_id, "lo": lo, "hi": hi, "min": inp.min_reviews},
+    ).fetchall()
+    return RatingsByItemResult(
+        restaurant_id=inp.restaurant_id,
+        min_reviews=inp.min_reviews,
+        items=[
+            ItemRating(
+                menu_item_id=r["id"],
+                name=r["name"],
+                category=r["category"],
+                reviews=r["n"],
+                mean_rating=round(float(r["mean"]), 2),
+            )
+            for r in rows
+        ],
+    )
+
+
 _REVIEWS_WHERE = (
     "r.restaurant_id = %(rid)s "
     "AND (%(item)s::int IS NULL OR r.menu_item_id = %(item)s::int) "

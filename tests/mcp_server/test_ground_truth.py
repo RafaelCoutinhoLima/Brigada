@@ -99,3 +99,23 @@ async def test_delivery_hour_buckets_use_local_time(server: BrigadaMCPServer) ->
     hour_of = {o.id: o.created_at.hour for o in orders(3, START_DATE, END_DATE)}
     expected = Counter(hour_of[d.order_id] for d in dataset().deliveries if d.order_id in hour_of)
     assert {g["hour"]: g["deliveries"] for g in out["groups"]} == dict(expected)
+
+
+async def test_ratings_by_item_match_the_generator(server: BrigadaMCPServer) -> None:
+    out = await call(server, "ratings_by_item", restaurant_id=3, min_reviews=5)
+    ratings: dict[int, list[int]] = {}
+    for r in dataset().reviews:
+        if r.restaurant_id == 3 and r.menu_item_id is not None:
+            ratings.setdefault(r.menu_item_id, []).append(r.rating)
+    expected = {i: (len(v), round(sum(v) / len(v), 2)) for i, v in ratings.items() if len(v) >= 5}
+    got = {i["menu_item_id"]: (i["reviews"], i["mean_rating"]) for i in out["items"]}
+    assert got == expected
+    means = [i["mean_rating"] for i in out["items"]]
+    assert means == sorted(means, reverse=True)  # best first
+
+
+async def test_ratings_by_item_answers_the_eval_question(server: BrigadaMCPServer) -> None:
+    # menu-008: "Entre os itens com pelo menos 5 avaliações, qual tem a melhor nota?"
+    out = await call(server, "ratings_by_item", restaurant_id=3, min_reviews=5)
+    assert out["items"][0]["name"] == "Missoshiru"
+    assert all(i["reviews"] >= 5 for i in out["items"])
