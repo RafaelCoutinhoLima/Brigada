@@ -195,7 +195,9 @@ class _Orchestration:
     # ---- roles --------------------------------------------------------------------------
 
     async def _plan(self) -> Plan:
-        role = roles.planner(self.client, self.restaurant_id, self.today, self.restaurant_name)
+        role = roles.planner(
+            self.client, self.restaurant_id, self.today, self.restaurant_name, self.question
+        )
         result = await self._role(role, self.question, "plan")
         return Plan.model_validate_json(result.text)
 

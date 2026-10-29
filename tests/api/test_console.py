@@ -320,3 +320,47 @@ async def test_extra_steps_of_the_last_review_are_not_shown(client: TestClient) 
     finally:
         with psycopg.connect(url) as conn:
             conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
+
+
+def _local(settings: Settings, host: str = "127.0.0.1") -> TestClient:
+    app.dependency_overrides[get_settings] = lambda: settings
+    return TestClient(app, client=(host, 50000), base_url="http://127.0.0.1:8000")
+
+
+def test_local_session_is_off_by_default() -> None:
+    with _local(SETTINGS) as c:
+        assert c.get("/console/local-session").status_code == 404
+    app.dependency_overrides.clear()
+
+
+def test_local_session_hands_the_key_only_to_loopback_without_proxy() -> None:
+    on = SETTINGS.model_copy(update={"console_local_key": "test-key"})
+    with _local(on) as c:
+        assert c.get("/console/local-session").json() == {"key": "test-key"}
+        proxied = c.get("/console/local-session", headers={"X-Forwarded-For": "203.0.113.9"})
+        assert proxied.status_code == 404  # a reverse proxy makes everyone look local
+    with _local(on, host="192.168.0.20") as c:
+        assert c.get("/console/local-session").status_code == 404
+    app.dependency_overrides.clear()
+
+
+def test_local_session_refuses_a_key_that_is_not_a_real_api_key() -> None:
+    with _local(SETTINGS.model_copy(update={"console_local_key": "made-up"})) as c:
+        assert c.get("/console/local-session").status_code == 404
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Host": "evil.example:8000"},  # DNS rebinding: hostile name resolving to 127.0.0.1
+        {"Sec-Fetch-Site": "cross-site"},
+        {"X-Forwarded-Host": "brigada.example"},
+        {"Via": "1.1 proxy"},
+        {"CF-Connecting-IP": "203.0.113.9"},
+    ],
+)
+def test_local_session_refuses_rebinding_cross_site_and_any_proxy(headers: dict[str, str]) -> None:
+    with _local(SETTINGS.model_copy(update={"console_local_key": "test-key"})) as c:
+        assert c.get("/console/local-session", headers=headers).status_code == 404
+    app.dependency_overrides.clear()

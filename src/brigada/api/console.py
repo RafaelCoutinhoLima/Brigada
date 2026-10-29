@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 import psycopg
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse
 from psycopg.rows import dict_row
 from pydantic import BaseModel, ConfigDict, Field
@@ -158,6 +158,48 @@ class ConsoleState(BaseModel):
 def console_page() -> HTMLResponse:
     page = resources.files("brigada.api").joinpath("static/console.html")
     return HTMLResponse(page.read_text(encoding="utf-8"))
+
+
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+_PROXY_HEADERS = ("forwarded", "via", "x-real-ip", "cf-connecting-ip", "true-client-ip")
+
+
+def _is_local_request(request: Request) -> bool:
+    """Loopback peer, loopback Host, same-origin, and no sign of a proxy.
+
+    The Host check defeats DNS rebinding (a hostile site whose name resolves to 127.0.0.1 still
+    sends its own name as Host); Sec-Fetch-Site rejects cross-site fetches from the browser.
+    """
+    peer = request.client.host if request.client else ""
+    raw = request.headers.get("host", "")
+    host = raw.split("]")[0] + "]" if raw.startswith("[") else raw.rsplit(":", 1)[0]
+    fetch_site = request.headers.get("sec-fetch-site", "same-origin")
+    proxied = any(h in request.headers for h in _PROXY_HEADERS) or any(
+        h.startswith("x-forwarded-") for h in request.headers
+    )
+    return (
+        peer in _LOOPBACK
+        and host in _LOOPBACK_HOSTS
+        and fetch_site in ("same-origin", "none")
+        and not proxied
+    )
+
+
+@router.get("/local-session", include_in_schema=False)
+def console_local_session(
+    request: Request, settings: Annotated[Settings, Depends(get_settings)]
+) -> dict[str, str]:
+    """Hand the local key to a console opened on this machine, so nobody types it.
+
+    Off unless CONSOLE_LOCAL_KEY is set. Refused (404, as if it did not exist) for any client
+    that is not loopback or that came through a proxy: behind a reverse proxy every request
+    looks like 127.0.0.1, so without the header check the key would be served to the internet.
+    """
+    key = settings.console_local_key
+    if not key or not _is_local_request(request) or key not in settings.api_key_scopes():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return {"key": key}
 
 
 @router.get("/runs", response_model=ConsoleState)

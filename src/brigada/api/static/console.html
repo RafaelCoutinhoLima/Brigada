@@ -82,6 +82,13 @@
   .member.is-failed .doing { color: var(--pepper); }
   .member.is-off { opacity: .45; }
 
+  .onboard { margin: 6px 0 10px; padding: 12px 14px; border: 1px dashed var(--saffron); background: var(--saffron-soft); font-size: 14px; }
+  .onboard strong { color: var(--saffron); }
+  .onboard ol { margin: 6px 0; padding-left: 22px; }
+  .onboard code { color: var(--basil); }
+  .onboard.hide { display: none; }
+  .linkish { background: none; border: none; padding: 0; color: var(--basil); text-decoration: underline; cursor: pointer; }
+
   /* avatar: 8-bit bots, animated by state */
   .avatar { position: relative; width: 70px; height: 70px; display: grid; place-items: end center; }
   .avatar svg { width: 70px; height: 65px; display: block; shape-rendering: crispEdges; overflow: visible; }
@@ -236,6 +243,15 @@
   <section class="pass" aria-labelledby="pass-title">
     <h2 id="pass-title">A brigada no passe</h2>
     <p class="hint">O Chef divide o pedido, as estações investigam ao mesmo tempo, a Clara monta a resposta e a Dona Neide prova antes de servir.</p>
+    <div class="onboard" id="onboard">
+      <strong>A brigada está dormindo: o console ainda não está conectado.</strong>
+      <ol>
+        <li>Digite a chave no campo <b>Chave</b> lá em cima (no ambiente local: <code>dev-key</code>).</li>
+        <li>Clique em <b>Conectar</b>. Os robôs acordam e mostram cada pedido deste restaurante.</li>
+        <li>Escreva uma pergunta embaixo e clique em <b>Enviar pedido</b>.</li>
+      </ol>
+      <span>Sem chave? <button type="button" class="linkish" id="onboard-demo">Veja uma demonstração</button>, sem servidor e sem custo.</span>
+    </div>
     <div class="line-up" id="line-up"></div>
   </section>
 
@@ -529,8 +545,18 @@
   function render(state) {
     const latest = {};
     for (const r of state.runs) if (!latest[r.agent]) latest[r.agent] = r;  // newest first
-    for (const s of STATIONS) renderStation(s.name, latest[s.name]);
     const o = state.orchestrations && state.orchestrations[0];
+    for (const s of STATIONS) {
+      const run = latest[s.name];
+      // A run from an older orchestration is not part of the current order: don't show it as
+      // if this station were working on it.
+      if (o && run && run.orchestration_id && run.orchestration_id !== o.id) {
+        if (stations[s.name].runId !== null) resetStation(s.name);
+        stations[s.name].chip.textContent = "fora deste pedido";
+        continue;
+      }
+      renderStation(s.name, run);
+    }
     if (o) renderOrch(o, latest);
     else for (const s of STATIONS) if (latest[s.name]) setMember(s.name, latest[s.name].status, doingOf(latest[s.name]));
 
@@ -546,7 +572,10 @@
   }
 
   // ---------- connection ----------
-  function setLink(kind, text) { $("link").className = "link " + kind; $("link-text").textContent = text; }
+  function setLink(kind, text) {
+    $("link").className = "link " + kind; $("link-text").textContent = text;
+    $("onboard").classList.toggle("hide", kind === "on");  // help only while nothing is connected
+  }
   function flash(text) { $("flash").textContent = text; if (text) setTimeout(() => { if ($("flash").textContent === text) $("flash").textContent = ""; }, 7000); }
 
   let timer = null, demo = null;
@@ -722,6 +751,7 @@
   }
   function stopDemo() { demo = null; $("demo").setAttribute("aria-pressed", "false"); $("demo").textContent = "Ver demonstração"; }
   $("demo").onclick = () => (demo ? (stopDemo(), setLink("", "Desconectado")) : startDemo());
+  $("onboard-demo").onclick = () => startDemo();
 
   // ---------- boot ----------
   $("key").value = store.get("brigada.key") || "";
@@ -729,6 +759,12 @@
   const params = new URLSearchParams(location.search);
   if (params.has("demo")) startDemo();
   else if ($("key").value) connect();
+  else {
+    // On this machine the server can hand over the local key (CONSOLE_LOCAL_KEY): connect by itself.
+    fetch("/console/local-session").then(r => (r.ok ? r.json() : null)).then(s => {
+      if (s && s.key && !$("key").value && !demo) { $("key").value = s.key; connect(); }
+    }).catch(() => {});
+  }
   $("question").focus({ preventScroll: true });
 })();
 </script>
