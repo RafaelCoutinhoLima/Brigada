@@ -422,6 +422,9 @@ async def evaluate(
     cases = load_cases(cases_path, subset=subset)
     fn = answerer if answerer is not None else resolve_answerer(answerer_spec)
     started = datetime.now(UTC)
+    # Recorded before running: the code and prompts that answer are the ones loaded now, even
+    # if the working tree changes (another branch checked out) during a long run.
+    commit, prompts = git_commit(), prompts_hash()
     results = await run_cases(cases, fn, concurrency=concurrency, timeout_s=timeout_s)
     return RunReport(
         meta=RunMeta(
@@ -429,9 +432,9 @@ async def evaluate(
             subset=subset,
             started_at=started.isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
-            git_commit=git_commit(),
+            git_commit=commit,
             cases_sha256=_sha256_file(cases_path),
-            prompts_sha256=prompts_hash(),
+            prompts_sha256=prompts,
             world={"seed": SEED, "end_date": END_DATE.isoformat(), "today": TODAY.isoformat()},
             case_ids=[c.id for c in cases],
         ),

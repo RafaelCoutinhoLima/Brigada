@@ -102,6 +102,7 @@ async def orchestrate(
         await orchestrations.create(
             oid, restaurant_id=restaurant_id, question=question, today=today
         )
+        o.restaurant_name = await orchestrations.restaurant_name(restaurant_id)
     with get_tracer().start_as_current_span(
         "orchestration",
         attributes={"brigada.orchestration_id": oid, "brigada.restaurant_id": restaurant_id},
@@ -164,6 +165,7 @@ class _Orchestration:
         self.store = orchestrations
         self.total = OrchestrationResult(text="", steps=0, run_id=oid)
         self.outcomes: dict[str, StepOutcome] = {}
+        self.restaurant_name: str | None = None  # set by orchestrate() when a store can tell
 
     async def run(self) -> OrchestrationResult:
         plan = await self._plan()
@@ -193,7 +195,7 @@ class _Orchestration:
     # ---- roles --------------------------------------------------------------------------
 
     async def _plan(self) -> Plan:
-        role = roles.planner(self.client, self.restaurant_id, self.today)
+        role = roles.planner(self.client, self.restaurant_id, self.today, self.restaurant_name)
         result = await self._role(role, self.question, "plan")
         return Plan.model_validate_json(result.text)
 
@@ -215,7 +217,7 @@ class _Orchestration:
             prompt += "\n\nApontamentos da revisão para corrigir:\n" + "\n".join(
                 f"- {i}" for i in issues
             )
-        role = roles.synthesizer(self.client, self.restaurant_id, self.today)
+        role = roles.synthesizer(self.client, self.restaurant_id, self.today, self.restaurant_name)
         return (await self._role(role, prompt, f"synthesis-{n}")).text
 
     async def _review(self, text: str, n: int) -> Review:
@@ -232,7 +234,13 @@ class _Orchestration:
             f"{', '.join(untraced) or 'nenhum'}\n"
             f"Números que só aparecem na pergunta do dono: {', '.join(sorted(asked)) or 'nenhum'}"
         )
-        role = roles.critic(self.client, self.restaurant_id, self.today, frozenset(self.outcomes))
+        role = roles.critic(
+            self.client,
+            self.restaurant_id,
+            self.today,
+            frozenset(self.outcomes),
+            self.restaurant_name,
+        )
         review = Review.model_validate_json((await self._role(role, prompt, f"review-{n}")).text)
         self.total.reviews.append(review)
         await self._save(review=[r.model_dump() for r in self.total.reviews])

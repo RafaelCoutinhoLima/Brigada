@@ -28,6 +28,7 @@ TopItemsOrderBy = Literal["revenue", "qty"]
 TopItemsLimit = Annotated[int, Field(ge=1, le=50)]
 ReviewsLimit = Annotated[int, Field(ge=1, le=200)]
 Rating = Annotated[int, Field(ge=1, le=5)]
+MinReviews = Annotated[int, Field(ge=1, le=1000)]
 DiscountPct = Annotated[int, Field(ge=1, le=50, description="Discount in percent, 1 to 50.")]
 Reason = Annotated[
     str,
@@ -109,6 +110,18 @@ class ReviewsForItemInput(_Input):
         return self
 
 
+class RatingsByItemInput(_Input):
+    restaurant_id: RestaurantId
+    start_date: date | None = None
+    end_date: date | None = None
+    min_reviews: MinReviews = 1
+
+    @model_validator(mode="after")
+    def _valid_range(self) -> Self:
+        _check_range(self.start_date, self.end_date)
+        return self
+
+
 # --------------------------------------------------------------------------------------
 # Write tool inputs (they only ever create a pending action)
 # --------------------------------------------------------------------------------------
@@ -150,6 +163,10 @@ class SalesGroup(_Output):
     )
     orders: int
     revenue: float
+    days_with_orders: int = Field(
+        description="Distinct local days in this group with at least one order: divide by this "
+        "for a per-day average, not by calendar days (the history may be shorter)."
+    )
 
 
 class SalesByPeriodResult(_Output):
@@ -160,6 +177,9 @@ class SalesByPeriodResult(_Output):
     total_orders: int
     total_revenue: float
     average_ticket: float | None = Field(description="total_revenue / total_orders; null if 0.")
+    days_with_orders: int = Field(
+        description="Distinct local days in the period with at least one order."
+    )
     groups: list[SalesGroup] = Field(
         description="Zero-filled: every day/channel/hour/weekday appears, even with 0 orders. "
         "Empty when group_by is 'none'."
@@ -219,6 +239,22 @@ class ReviewsForItemResult(_Output):
     mean_rating: float | None = Field(description="Mean over all matching reviews; null if 0.")
     returned: int = Field(description="Number of reviews included below (most recent first).")
     reviews: list[Review]
+
+
+class ItemRating(_Output):
+    menu_item_id: int
+    name: str
+    category: str
+    reviews: int
+    mean_rating: float
+
+
+class RatingsByItemResult(_Output):
+    restaurant_id: int
+    min_reviews: int
+    items: list[ItemRating] = Field(
+        description="Items with at least min_reviews reviews, best mean rating first."
+    )
 
 
 class DeliveryGroup(_Output):

@@ -41,9 +41,12 @@ from brigada.mcp_server.models import (
     ListMenuItemsInput,
     ListMenuItemsResult,
     MenuItemId,
+    MinReviews,
     PauseMenuItemInput,
     PendingActionCreated,
     Rating,
+    RatingsByItemInput,
+    RatingsByItemResult,
     Reason,
     RestaurantId,
     ReviewsForItemInput,
@@ -335,6 +338,27 @@ def build_server() -> BrigadaMCPServer:
             limit=limit,
         )
         return await _run(queries.reviews_for_item, inp)
+
+    @server.tool(annotations=READ_ONLY)
+    async def ratings_by_item(
+        restaurant_id: RestaurantId,
+        start_date: date | None = None,
+        end_date: date | None = None,
+        min_reviews: MinReviews = 1,
+    ) -> RatingsByItemResult:
+        """Review count and mean rating of every menu item at once, best rated first.
+
+        Use it to compare items ("best/worst rated dish", "items with at least 5 reviews")
+        instead of calling reviews_for_item once per item. Dates are optional and inclusive.
+        """
+        inp = _validate(
+            RatingsByItemInput,
+            restaurant_id=restaurant_id,
+            start_date=start_date,
+            end_date=end_date,
+            min_reviews=min_reviews,
+        )
+        return await _run(queries.ratings_by_item, inp)
 
     @server.tool(annotations=READ_ONLY)
     async def delivery_times(

@@ -88,12 +88,18 @@ def extract_numbers(text: str) -> list[float]:
     return values
 
 
+# Markdown emphasis and code marks around words ("o canal *app* zerou") are formatting, not
+# content: they must not hide a phrase from the scorer.
+_MARKDOWN = re.compile(r"[*_`~]+")
+
+
 def _contains_phrase(haystack: str, phrase: str) -> bool:
-    """Whole-word, case/accent-insensitive containment."""
+    """Whole-word, case/accent-insensitive containment, ignoring Markdown emphasis."""
     needle = normalize(phrase)
     if not needle:
         return False
-    return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", normalize(haystack)) is not None
+    text = normalize(_MARKDOWN.sub("", haystack))
+    return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", text) is not None
 
 
 def contains_any(text: str, values: Iterable[str]) -> bool:
@@ -107,6 +113,8 @@ REFUSAL_MARKERS: tuple[str, ...] = (
     "não consigo ajudar",
     "não é possível",
     "não tenho acesso",
+    "só tenho acesso",
+    "tenho acesso apenas",
     "não tenho permissão",
     "fora do escopo",
     "fora do meu escopo",

@@ -24,6 +24,12 @@ class OrchestrationStore:
             (oid, restaurant_id, question, today),
         )
 
+    async def restaurant_name(self, restaurant_id: int) -> str | None:
+        async with await psycopg.AsyncConnection.connect(self.database_url) as conn:
+            cur = await conn.execute("SELECT name FROM restaurants WHERE id = %s", (restaurant_id,))
+            row = await cur.fetchone()
+        return str(row[0]) if row else None
+
     async def update(
         self, oid: str, *, plan: Any = None, review: Any = None, rounds: int | None = None
     ) -> None:

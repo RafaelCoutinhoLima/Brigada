@@ -23,6 +23,9 @@ from brigada.runtime.types import ToolCall
 from .plan import Plan, Review, check_graph, tool_schema
 
 SUBMIT_PLAN = "submit_plan"
+# Reasoning models spend output tokens thinking before they write: 2000 was not enough for the
+# critic to reach its submit_review call (it ended in max_tokens with no content).
+STRUCTURED_MAX_TOKENS = 8000
 SUBMIT_REVIEW = "submit_review"
 _WEEKDAYS = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
 
@@ -35,7 +38,9 @@ class Role:
     prompt_sha256: str
 
 
-def planner(client: ModelClient, restaurant_id: int, today: date) -> Role:
+def planner(
+    client: ModelClient, restaurant_id: int, today: date, restaurant_name: str | None = None
+) -> Role:
     catalog = "\n".join(
         f"- {s.name}: {s.description} Ferramentas: {', '.join(s.tools)}."
         for s in SPECIALISTS.values()
@@ -52,10 +57,17 @@ def planner(client: ModelClient, restaurant_id: int, today: date) -> Role:
         "Entrega o plano: passos para os especialistas ou uma resposta direta.",
         Plan,
         lambda p: None,
+        restaurant_name,
     )
 
 
-def critic(client: ModelClient, restaurant_id: int, today: date, done: frozenset[str]) -> Role:
+def critic(
+    client: ModelClient,
+    restaurant_id: int,
+    today: date,
+    done: frozenset[str],
+    restaurant_name: str | None = None,
+) -> Role:
     def extra_steps_are_new(review: Review) -> None:
         check_graph(review.extra_steps, done)
 
@@ -70,19 +82,22 @@ def critic(client: ModelClient, restaurant_id: int, today: date, done: frozenset
         "Entrega o veredito da revisão da resposta final.",
         Review,
         extra_steps_are_new,
+        restaurant_name,
     )
 
 
-def synthesizer(client: ModelClient, restaurant_id: int, today: date) -> Role:
+def synthesizer(
+    client: ModelClient, restaurant_id: int, today: date, restaurant_name: str | None = None
+) -> Role:
     settings = get_settings()
     prefix = load_prompt("synthesizer").text
     agent = Agent(
         AgentConfig(
             name="synthesizer",
             model=settings.model_strong,
-            system=_with_context(prefix, restaurant_id, today),
+            system=_with_context(prefix, restaurant_id, today, restaurant_name),
             max_steps=1,
-            max_tokens=2000,
+            max_tokens=STRUCTURED_MAX_TOKENS,
         ),
         client,
         [],
@@ -102,6 +117,7 @@ def _structured[M: BaseModel](
     description: str,
     schema: type[M],
     extra_check: Callable[[M], None],
+    restaurant_name: str | None = None,
 ) -> Role:
     async def validate(call: ToolCall) -> str:
         try:
@@ -115,9 +131,9 @@ def _structured[M: BaseModel](
         AgentConfig(
             name=name,
             model=model,
-            system=_with_context(prefix, restaurant_id, today),
+            system=_with_context(prefix, restaurant_id, today, restaurant_name),
             max_steps=3,
-            max_tokens=2000,
+            max_tokens=STRUCTURED_MAX_TOKENS,
             terminal_tools=frozenset({tool}),
             tool_choice={"type": "tool", "name": tool},
         ),
@@ -128,12 +144,14 @@ def _structured[M: BaseModel](
     return Role(agent, _sha(prefix + json.dumps(tool_schema(schema), sort_keys=True)))
 
 
-def _with_context(prefix: str, restaurant_id: int, today: date) -> str:
-    # Run context goes at the end so the stable instructions stay a cacheable prefix.
+def _with_context(prefix: str, restaurant_id: int, today: date, name: str | None) -> str:
+    # Run context goes at the end so the stable instructions stay a cacheable prefix. The name
+    # lets the planner notice a question about another restaurant.
+    who = f"{name} (restaurant_id {restaurant_id})" if name else f"restaurant_id {restaurant_id}"
     return (
         f"{prefix}\n"
         f"Contexto desta conversa:\n"
-        f"- restaurant_id: {restaurant_id}\n"
+        f"- restaurante do dono: {who}\n"
         f"- hoje: {today.isoformat()} ({_WEEKDAYS[today.weekday()]})\n"
     )
 

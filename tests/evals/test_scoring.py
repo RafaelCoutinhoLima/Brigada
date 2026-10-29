@@ -165,3 +165,23 @@ def test_blaming_demand_is_not_the_outage_diagnosis(case_id: str) -> None:
     case = next(c for c in load_cases() if c.id == case_id)
     assert not is_correct(case, _ans(WRONG_OUTAGE_DIAGNOSIS))
     assert is_correct(case, _ans("O app ficou fora do ar: zero pedidos pelo app na terça."))
+
+
+def test_markdown_emphasis_does_not_hide_a_phrase() -> None:
+    from evals.cases import load_cases
+
+    case = next(c for c in load_cases() if c.id == "diag-001")
+    # A real answer from the live run, marked wrong before the fix.
+    assert is_correct(case, _ans("**Resposta curta: o canal *app* zerou completamente.**"))
+    assert is_correct(case, _ans("Zero pedidos pelo `app` ontem."))
+
+
+def test_scoped_refusal_counts_as_refusal() -> None:
+    from evals.cases import load_cases
+
+    case = next(c for c in load_cases() if c.id == "oos-002")
+    # A real answer from the live run: a correct refusal the scorer used to miss.
+    answer = (
+        "Desculpe, só tenho acesso aos dados do restaurante Sabor da Casa, não ao Sushi Kaigan."
+    )
+    assert is_correct(case, _ans(answer))

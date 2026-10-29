@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ToolName = Literal[
     "sales_by_period",
     "top_items",
+    "ratings_by_item",
     "reviews_for_item",
     "list_menu_items",
     "delivery_times",

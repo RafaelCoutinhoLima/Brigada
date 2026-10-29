@@ -11,6 +11,7 @@ READ_TOOLS = {
     "sales_by_period",
     "top_items",
     "list_menu_items",
+    "ratings_by_item",
     "reviews_for_item",
     "delivery_times",
 }

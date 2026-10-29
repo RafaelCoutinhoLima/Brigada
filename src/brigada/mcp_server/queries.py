@@ -18,9 +18,12 @@ from brigada.mcp_server.models import (
     DeliveryGroup,
     DeliveryTimesInput,
     DeliveryTimesResult,
+    ItemRating,
     ListMenuItemsInput,
     ListMenuItemsResult,
     MenuItem,
+    RatingsByItemInput,
+    RatingsByItemResult,
     Review,
     ReviewsForItemInput,
     ReviewsForItemResult,
@@ -102,7 +105,8 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
         "weekday_names": [WEEKDAY_NAMES[i] for i in range(1, 8)],
     }
     totals = conn.execute(
-        "SELECT count(*) AS orders, coalesce(sum(total), 0) AS revenue FROM orders "
+        "SELECT count(*) AS orders, coalesce(sum(total), 0) AS revenue, "
+        "count(DISTINCT (created_at AT TIME ZONE %(tz)s)::date) AS days FROM orders "
         "WHERE restaurant_id = %(rid)s AND created_at >= %(lo)s AND created_at < %(hi)s",
         params,
     ).fetchone()
@@ -113,10 +117,12 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
         order = "keys.ord" if inp.group_by == "channel" else "keys.k"
         query = sql.SQL(
             "WITH keys AS ({keys}), "
-            "o AS (SELECT {bucket} AS k, total FROM orders "
+            "o AS (SELECT {bucket} AS k, total, (created_at AT TIME ZONE %(tz)s)::date AS d "
+            "      FROM orders "
             "      WHERE restaurant_id = %(rid)s AND created_at >= %(lo)s "
             "        AND created_at < %(hi)s) "
-            "SELECT keys.label, count(o.total) AS orders, coalesce(sum(o.total), 0) AS revenue "
+            "SELECT keys.label, count(o.total) AS orders, coalesce(sum(o.total), 0) AS revenue, "
+            "       count(DISTINCT o.d) AS days "
             "FROM keys LEFT JOIN o ON o.k = keys.k "
             "GROUP BY keys.k, keys.label{extra_group} ORDER BY {order}"
         ).format(
@@ -126,7 +132,12 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
             order=sql.SQL(order),
         )
         groups = [
-            SalesGroup(key=r["label"], orders=r["orders"], revenue=_money(r["revenue"]))
+            SalesGroup(
+                key=r["label"],
+                orders=r["orders"],
+                revenue=_money(r["revenue"]),
+                days_with_orders=r["days"],
+            )
             for r in conn.execute(query, params).fetchall()
         ]
 
@@ -139,6 +150,7 @@ def sales_by_period(conn: Conn, inp: SalesByPeriodInput) -> SalesByPeriodResult:
         group_by=inp.group_by,
         total_orders=n_orders,
         total_revenue=revenue,
+        days_with_orders=totals["days"],
         average_ticket=round(revenue / n_orders, 2) if n_orders else None,
         groups=groups,
     )
@@ -220,7 +232,44 @@ def list_menu_items(conn: Conn, inp: ListMenuItemsInput) -> ListMenuItemsResult:
 # reviews_for_item
 # --------------------------------------------------------------------------------------
 
+
 # NULL-tolerant filters: a NULL parameter disables its condition.
+def ratings_by_item(conn: Conn, inp: RatingsByItemInput) -> RatingsByItemResult:
+    """Review count and mean rating per menu item in one query (best first).
+
+    Joined on restaurant *and* item id, so a review can never surface another restaurant's
+    item. Only numbers and menu names come back: no customer text, nothing untrusted.
+    """
+    ensure_restaurant(conn, inp.restaurant_id)
+    lo = local_day_bounds(inp.start_date, inp.start_date)[0] if inp.start_date else None
+    hi = local_day_bounds(inp.end_date, inp.end_date)[1] if inp.end_date else None
+    rows = conn.execute(
+        "SELECT m.id, m.name, m.category, count(*) AS n, avg(r.rating) AS mean "
+        "FROM reviews r JOIN menu_items m "
+        "  ON m.id = r.menu_item_id AND m.restaurant_id = r.restaurant_id "
+        "WHERE r.restaurant_id = %(rid)s "
+        "AND (%(lo)s::timestamptz IS NULL OR r.created_at >= %(lo)s::timestamptz) "
+        "AND (%(hi)s::timestamptz IS NULL OR r.created_at < %(hi)s::timestamptz) "
+        "GROUP BY m.id, m.name, m.category HAVING count(*) >= %(min)s "
+        "ORDER BY avg(r.rating) DESC, count(*) DESC, m.id",
+        {"rid": inp.restaurant_id, "lo": lo, "hi": hi, "min": inp.min_reviews},
+    ).fetchall()
+    return RatingsByItemResult(
+        restaurant_id=inp.restaurant_id,
+        min_reviews=inp.min_reviews,
+        items=[
+            ItemRating(
+                menu_item_id=r["id"],
+                name=r["name"],
+                category=r["category"],
+                reviews=r["n"],
+                mean_rating=round(float(r["mean"]), 2),
+            )
+            for r in rows
+        ],
+    )
+
+
 _REVIEWS_WHERE = (
     "r.restaurant_id = %(rid)s "
     "AND (%(item)s::int IS NULL OR r.menu_item_id = %(item)s::int) "
