@@ -55,10 +55,15 @@ _Filled in as modules ship._
 <!-- results:start -->
 | Metric | Value |
 |--------|-------|
-| Eval accuracy | – |
-| p50 latency | – |
-| Cost per question | – |
+| Eval accuracy | 60.0% (9/15, subset: ci) |
+| Tool precision / recall | 64.3% / 81.8% |
+| Mean steps | 4.58 |
+| p50 latency | 55.0 s |
+| p95 latency | 159.6 s |
+| Cost per question | US$ 0.0000 |
 | Router savings vs always-strong | – |
+
+_Answerer `brigada.orchestration:answer`, commit `2ed609f`, 2026-10-29. Models: OpenRouter `:free` (nemotron-3-ultra for specialists and synthesis, nemotron-3.5-lightning for planner and critic)._
 <!-- results:end -->
 
 ## Stack
