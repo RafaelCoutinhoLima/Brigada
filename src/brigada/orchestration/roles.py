@@ -7,6 +7,7 @@ step budget. The synthesizer has no tools and answers in text.
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -39,7 +40,11 @@ class Role:
 
 
 def planner(
-    client: ModelClient, restaurant_id: int, today: date, restaurant_name: str | None = None
+    client: ModelClient,
+    restaurant_id: int,
+    today: date,
+    restaurant_name: str | None = None,
+    question: str = "",
 ) -> Role:
     catalog = "\n".join(
         f"- {s.name}: {s.description} Ferramentas: {', '.join(s.tools)}."
@@ -56,9 +61,26 @@ def planner(
         SUBMIT_PLAN,
         "Entrega o plano: passos para os especialistas ou uma resposta direta.",
         Plan,
-        lambda p: None,
+        lambda plan: dates_come_from_the_owner(plan, question),
         restaurant_name,
     )
+
+
+_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b")
+
+
+def dates_come_from_the_owner(plan: Plan, question: str) -> None:
+    """Tasks keep the owner's relative dates ("última terça"): the specialists know today and
+    resolve them. A date the planner computed itself is refused, because it gets them wrong
+    (a live run turned "última terça" on a Wednesday 28/10 into 21/10 instead of 27/10)."""
+    allowed = set(_DATE.findall(question))
+    for step in plan.steps:
+        invented = [d for d in _DATE.findall(step.task) if d not in allowed]
+        if invented:
+            raise ValueError(
+                f"step {step.id} writes dates {invented} the owner did not; keep the owner's "
+                "words for dates (e.g. 'última terça', 'ontem'), the specialist resolves them"
+            )
 
 
 def critic(

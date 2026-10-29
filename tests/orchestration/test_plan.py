@@ -100,3 +100,23 @@ def test_huge_digit_runs_do_not_crash() -> None:
         untraced_numbers("ok, 1 pedido", ["pedido 123456789012345678901234567", boleto, "1"]) == []
     )
     assert untraced_numbers(f"boleto {boleto}", ["1"]) == [boleto]
+
+
+def test_planner_may_not_invent_dates() -> None:
+    from brigada.orchestration.plan import Plan
+    from brigada.orchestration.roles import dates_come_from_the_owner
+
+    def plan_with(task: str) -> Plan:
+        return Plan.model_validate(
+            {"steps": [{"id": "s1", "specialist": "sales", "task": task, "depends_on": []}]}
+        )
+
+    question = "Por que minhas vendas caíram na última terça?"
+    # The live bug: "última terça" on Wednesday 28/10 became 21/10.
+    with pytest.raises(ValueError, match="2026-10-21"):
+        dates_come_from_the_owner(
+            plan_with("Compare a terça (2026-10-21) com 2026-10-14"), question
+        )
+    dates_come_from_the_owner(plan_with("Compare a última terça com a terça anterior"), question)
+    # A date the owner wrote may be repeated.
+    dates_come_from_the_owner(plan_with("Vendas de 15/10"), "Quanto vendi em 15/10?")
