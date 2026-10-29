@@ -291,3 +291,15 @@ def test_free_models_cost_nothing_and_unknown_paid_models_still_fail() -> None:
     assert cost_from_usage(MODEL, usage) == Decimal(0)
     with pytest.raises(UnknownModelError):
         cost_from_usage("google/gemma-4-31b-it", usage)
+
+
+async def test_upstream_reason_is_kept_in_the_error() -> None:
+    body = {
+        "error": {
+            "code": 429,
+            "message": "Provider returned error",
+            "metadata": {"raw": "model is temporarily rate-limited upstream"},
+        }
+    }
+    with pytest.raises(anthropic.RateLimitError, match="rate-limited upstream"):
+        await create(Server(httpx2.Response(429, json=body)))

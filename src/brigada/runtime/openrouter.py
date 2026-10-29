@@ -263,6 +263,12 @@ def _status_error(response: httpx2.Response, payload: Mapping[str, Any]) -> anth
     if code < 400:
         code = 502  # an error reported inside a 200: treat as an upstream failure
     message = str(error.get("message") or f"OpenRouter returned HTTP {code}")
+    # "Provider returned error" alone says nothing; the upstream reason is in metadata.raw
+    # (e.g. a free model's shared pool being rate-limited). It goes to logs and runs.error,
+    # never to the model or the HTTP client.
+    metadata = error.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("raw"):
+        message = f"{message}: {str(metadata['raw'])[:300]}"
     cls = _STATUS_ERRORS.get(code) or (
         anthropic.InternalServerError if code >= 500 else anthropic.APIStatusError
     )
