@@ -27,6 +27,7 @@ from brigada.mcp_server.models import (
     CreatePromotionInput,
     PauseMenuItemInput,
     PendingAction,
+    ProposePurchaseInput,
 )
 from brigada.mcp_server.queries import get_menu_item
 
@@ -68,6 +69,15 @@ def _execute(conn: Conn, action: PendingAction) -> dict[str, Any]:
             (pause.menu_item_id, pause.restaurant_id),
         )
         return {"menu_item_id": pause.menu_item_id, "active": False}
+    if action.kind == "propose_purchase":
+        from brigada.mcp_server.inventory import get_ingredient
+
+        purchase = ProposePurchaseInput.model_validate(base)
+        ing = get_ingredient(conn, purchase.restaurant_id, purchase.ingredient_id)  # tenant guard
+        # Approval authorizes the order; stock only changes when the goods are received.
+        return {"purchase_approved": {"ingredient": ing["name"], "qty": purchase.qty}}
+    if action.kind != "create_promotion":
+        raise InvalidStateError(f"unknown action kind {action.kind!r}")
     promo = CreatePromotionInput.model_validate(base)
     get_menu_item(conn, promo.restaurant_id, promo.menu_item_id)  # tenant guard
     row = conn.execute(

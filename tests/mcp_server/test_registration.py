@@ -12,10 +12,16 @@ READ_TOOLS = {
     "top_items",
     "list_menu_items",
     "ratings_by_item",
+    "stock_levels",
+    "ingredient_consumption",
+    "dish_margins",
+    "cmv",
+    "waste_report",
+    "cost_changes",
     "reviews_for_item",
     "delivery_times",
 }
-WRITE_TOOLS = {"pause_menu_item", "create_promotion"}
+WRITE_TOOLS = {"pause_menu_item", "create_promotion", "propose_purchase"}
 
 
 async def test_registered_tools_are_exactly_the_expected_set() -> None:

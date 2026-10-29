@@ -35,7 +35,7 @@ Reason = Annotated[
     StringConstraints(strip_whitespace=True, min_length=3, max_length=500),
     Field(description="Why this action is proposed; shown to the human approver."),
 ]
-ActionKind = Literal["pause_menu_item", "create_promotion"]
+ActionKind = Literal["pause_menu_item", "create_promotion", "propose_purchase"]
 ActionStatus = Literal["pending", "executed", "rejected"]
 
 WEEKDAY_NAMES: dict[int, str] = {
@@ -300,3 +300,172 @@ class PendingAction(_Output):
     decided_by: str | None
     decided_at: datetime | None
     decision_note: str | None
+
+
+# --------------------------------------------------------------------------------------
+# Inventory (stock, recipes, costs). Every number is computed in SQL from the movements.
+# --------------------------------------------------------------------------------------
+
+IngredientId = Annotated[int, Field(gt=0, description="Ingredient id (see stock_levels).")]
+RecentDays = Annotated[int, Field(ge=7, le=90)]
+PurchaseQty = Annotated[float, Field(gt=0, le=10_000)]
+
+
+class StockLevelsInput(_Input):
+    restaurant_id: RestaurantId
+    only_below_reorder_point: bool = False
+
+
+class StockLevel(_Output):
+    ingredient_id: int
+    name: str
+    unit: str
+    on_hand: float
+    avg_daily_use: float = Field(description="Mean daily use by sales over the last 14 days.")
+    cover_days: float | None = Field(description="on_hand / avg_daily_use; null if not used.")
+    lead_time_days: int
+    safety_days: int
+    reorder_point: float = Field(description="avg_daily_use x (lead_time_days + safety_days).")
+    below_reorder_point: bool
+    runs_out_before_delivery: bool = Field(description="cover_days < lead_time_days.")
+
+
+class StockLevelsResult(_Output):
+    restaurant_id: int
+    as_of: date = Field(description="Last day with stock movements.")
+    items: list[StockLevel] = Field(description="Lowest cover first.")
+
+
+class PeriodInput(_Input):
+    restaurant_id: RestaurantId
+    start_date: date
+    end_date: date
+
+    @model_validator(mode="after")
+    def _valid_range(self) -> Self:
+        _check_range(self.start_date, self.end_date)
+        return self
+
+
+class ConsumptionInput(PeriodInput):
+    ingredient_id: IngredientId | None = None
+
+
+class IngredientUse(_Output):
+    ingredient_id: int
+    name: str
+    unit: str
+    purchased: float
+    sold: float = Field(description="Used by the dishes sold (recipe x quantity).")
+    registered_waste: float
+    unexplained_loss: float = Field(description="Missing at physical counts (books - counted).")
+    avg_cost: float | None = Field(description="Mean purchase cost per unit in the period.")
+
+
+class ConsumptionResult(_Output):
+    restaurant_id: int
+    start_date: date
+    end_date: date
+    items: list[IngredientUse]
+
+
+class DishMarginsInput(PeriodInput):
+    category: str | None = None
+    order_by: Literal["contribution", "margin_pct"] = "contribution"
+
+
+class DishMargin(_Output):
+    menu_item_id: int
+    name: str
+    category: str
+    price: float
+    unit_cost: float = Field(description="Recipe cost at the period's mean purchase costs.")
+    margin: float = Field(description="price - unit_cost, in R$.")
+    margin_pct: float = Field(description="margin / price, 0..1.")
+    qty_sold: int
+    contribution: float = Field(description="margin x qty_sold, in R$.")
+
+
+class DishMarginsResult(_Output):
+    restaurant_id: int
+    start_date: date
+    end_date: date
+    items: list[DishMargin]
+
+
+class CmvInput(PeriodInput):
+    group_by: Literal["none", "category"] = "none"
+
+
+class CmvGroup(_Output):
+    key: str
+    revenue: float
+    cost_of_goods: float
+    cmv_pct: float | None = Field(description="cost_of_goods / revenue, 0..1.")
+
+
+class CmvResult(_Output):
+    restaurant_id: int
+    start_date: date
+    end_date: date
+    revenue: float
+    cost_of_goods: float
+    cmv_pct: float | None
+    groups: list[CmvGroup]
+
+
+class WasteReportInput(_Input):
+    restaurant_id: RestaurantId
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @model_validator(mode="after")
+    def _valid_range(self) -> Self:
+        _check_range(self.start_date, self.end_date)
+        return self
+
+
+class WasteLine(_Output):
+    ingredient_id: int
+    name: str
+    unit: str
+    counts: int
+    expected: float = Field(description="What the books said before the counts (summed).")
+    counted: float
+    loss: float = Field(description="expected - counted.")
+    loss_share: float = Field(description="loss / expected, 0..1.")
+    loss_value: float = Field(description="loss x mean purchase cost, in R$.")
+
+
+class WasteReportResult(_Output):
+    restaurant_id: int
+    items: list[WasteLine] = Field(description="Largest loss in R$ first.")
+    total_loss_value: float
+
+
+class CostChangesInput(_Input):
+    restaurant_id: RestaurantId
+    recent_days: RecentDays = 30
+
+
+class CostChange(_Output):
+    ingredient_id: int
+    name: str
+    unit: str
+    previous_cost: float
+    recent_cost: float
+    change_pct: float = Field(description="recent / previous - 1.")
+
+
+class CostChangesResult(_Output):
+    restaurant_id: int
+    recent: tuple[date, date]
+    previous: tuple[date, date]
+    items: list[CostChange] = Field(description="Largest increase first.")
+
+
+class ProposePurchaseInput(_Input):
+    restaurant_id: RestaurantId
+    ingredient_id: IngredientId
+    qty: PurchaseQty
+    reason: Reason

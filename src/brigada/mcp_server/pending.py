@@ -15,6 +15,7 @@ from brigada.mcp_server.models import (
     CreatePromotionInput,
     PauseMenuItemInput,
     PendingActionCreated,
+    ProposePurchaseInput,
 )
 from brigada.mcp_server.queries import ensure_restaurant, get_menu_item
 
@@ -86,4 +87,26 @@ def propose_promotion(
             f"Promotion of {inp.discount_pct}% on '{item.name}' (id {item.menu_item_id}) "
             f"from {inp.start_date} to {inp.end_date} is {AWAITING}."
         ),
+    )
+
+
+def propose_purchase(
+    conn: Conn, inp: ProposePurchaseInput, run_id: str | None = None
+) -> PendingActionCreated:
+    from brigada.mcp_server.inventory import get_ingredient
+
+    ensure_restaurant(conn, inp.restaurant_id)
+    ing = get_ingredient(conn, inp.restaurant_id, inp.ingredient_id)  # tenant guard
+    action_id = _insert(
+        conn,
+        restaurant_id=inp.restaurant_id,
+        kind="propose_purchase",
+        payload={"ingredient_id": inp.ingredient_id, "qty": inp.qty},
+        reason=inp.reason,
+        run_id=run_id,
+    )
+    return PendingActionCreated(
+        action_id=action_id,
+        kind="propose_purchase",
+        message=f"Purchase of {inp.qty:g} {ing['unit']} of '{ing['name']}' is {AWAITING}.",
     )
