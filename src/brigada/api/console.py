@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/console", tags=["console"])
 
 PREVIEW_CHARS = 400
-AgentName = Literal["sales", "menu", "operations"]
+AgentName = Literal["sales", "menu", "operations", "inventory"]
 
 # Background runs started from the console. Kept here so they are not garbage-collected
 # mid-flight; each run records its own success or failure in `runs`. Each task carries
@@ -57,7 +57,9 @@ class DispatchRequest(BaseModel):
         default=False, description="Let the planner choose the specialists (ignores agents)"
     )
     agents: list[AgentName] = Field(
-        default_factory=lambda: ["sales", "menu", "operations"], min_length=1, max_length=3
+        default_factory=lambda: ["sales", "menu", "operations", "inventory"],
+        min_length=1,
+        max_length=4,
     )
     today: date | None = Field(
         default=None, description="Reference date for 'ontem'... (default: today)"

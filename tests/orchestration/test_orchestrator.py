@@ -30,6 +30,7 @@ ROLES = {
     "especialista de Vendas": "sales",
     "especialista de Cardápio": "menu",
     "especialista de Operações": "operations",
+    "especialista de Estoque": "inventory",
     "Você é o redator": "synthesizer",
     "Você é o revisor": "critic",
 }

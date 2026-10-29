@@ -147,7 +147,7 @@
   .ticket .empty { color: var(--ink-soft); font-size: 13px; }
   .ticket .total { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--steel-deep); display: flex; justify-content: space-between; font-size: 13px; }
 
-  .stations { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--paper); border: 1px solid var(--steel-deep); border-radius: 10px; min-height: 300px; }
+  .stations { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--paper); border: 1px solid var(--steel-deep); border-radius: 10px; min-height: 300px; }
   .station { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; border-left: 1px solid var(--steel); }
   .station:first-child { border-left: none; }
   .station-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px; border-bottom: 1px solid var(--steel); }
@@ -297,6 +297,7 @@
     planner:     { name: "Chef Augusto", role: "Chef: divide o pedido", body: "#39ff7a", skin: "#e8fff0", hat: 30, emblem: "ticket" },
     sales:       { name: "Bia", role: "Vendas", body: "#3ce0ff", skin: "#ffb000", hat: 18, emblem: "coin" },
     menu:        { name: "Tomás", role: "Cardápio e avaliações", body: "#b6ff3c", skin: "#ff4d6a", hat: 18, emblem: "leaf" },
+    inventory:   { name: "Lia", role: "Estoque e custos", body: "#ff9f43", skin: "#3ce0ff", hat: 18, emblem: "coin" },
     operations:  { name: "Rui", role: "Entregas", body: "#7d8cff", skin: "#3ce0ff", hat: 18, emblem: "wheel" },
     synthesizer: { name: "Clara", role: "Monta a resposta", body: "#ff7ad9", skin: "#ffe14d", hat: 24, emblem: "pen" },
     critic:      { name: "Dona Neide", role: "Prova antes de servir", body: "#ffb000", skin: "#39ff7a", hat: 24, emblem: "spoon" },
@@ -305,11 +306,14 @@
     { name: "sales", tools: ["sales_by_period", "top_items", "list_menu_items"] },
     { name: "menu", tools: ["list_menu_items", "top_items", "ratings_by_item", "reviews_for_item", "pause_menu_item", "create_promotion"] },
     { name: "operations", tools: ["delivery_times", "sales_by_period"] },
+    { name: "inventory", tools: ["stock_levels", "ingredient_consumption", "dish_margins", "cmv", "waste_report", "cost_changes", "propose_purchase"] },
   ];
   const TOOL = {
     sales_by_period: "vendas do período", top_items: "itens mais vendidos", list_menu_items: "o cardápio",
     reviews_for_item: "as avaliações", ratings_by_item: "as notas por prato", delivery_times: "os tempos de entrega",
     pause_menu_item: "pausa de prato (proposta)", create_promotion: "promoção (proposta)",
+    stock_levels: "o estoque", ingredient_consumption: "o consumo de insumos", dish_margins: "a margem dos pratos",
+    cmv: "o CMV", waste_report: "o desperdício", cost_changes: "a variação de custos", propose_purchase: "compra (proposta)",
   };
   const STATUS = { pending: "na fila", running: "preparando", succeeded: "pronto", failed: "falhou", skipped: "pulado" };
   const POLL_MS = 1000;
@@ -386,7 +390,7 @@
   const lineUp = $("line-up");
   const arrow = () => el("div", "arrow", "→");
   const group = (...keys) => { const g = el("div", "group"); keys.forEach(k => g.appendChild(member(k))); return g; };
-  lineUp.append(group("planner"), arrow(), group("sales", "menu", "operations"), arrow(), group("synthesizer"), arrow(), group("critic"));
+  lineUp.append(group("planner"), arrow(), group("sales", "menu", "operations", "inventory"), arrow(), group("synthesizer"), arrow(), group("critic"));
 
   function setMember(key, status, doing) {
     const x = members[key];
@@ -668,6 +672,11 @@
       ["call", "reviews_for_item", '{"restaurant_id": 1, "max_rating": 2, "limit": 50}'],
       ["result", "reviews_for_item", '{"count": 6, "mean_rating": 1.8}'],
       ["answer", "O cardápio não explica a queda: só 6 avaliações negativas no período e nenhum prato concentra reclamações."],
+    ],
+    inventory: [
+      ["call", "stock_levels", '{"restaurant_id": 1}'],
+      ["result", "stock_levels", '{"items": [{"name": "Mussarela", "cover_days": 2.0, "lead_time_days": 3, "runs_out_before_delivery": true}]}'],
+      ["answer", "A mussarela cobre só 2 dias e o fornecedor leva 3: vai faltar antes da próxima entrega."],
     ],
     operations: [
       ["call", "delivery_times", '{"restaurant_id": 1, "start_date": "2026-10-20", "end_date": "2026-10-27", "group_by": "weekday"}'],

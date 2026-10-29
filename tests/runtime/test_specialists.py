@@ -38,8 +38,11 @@ async def test_every_specialist_tool_is_registered_on_the_server() -> None:
         assert set(specialist.tools) <= names, specialist.name
 
 
-def test_only_menu_can_propose_changes() -> None:
-    assert set(MENU.tools) & WRITE_TOOLS == WRITE_TOOLS
+def test_each_write_tool_belongs_to_one_specialist() -> None:
+    from brigada.runtime.specialists import INVENTORY
+
+    assert set(MENU.tools) & WRITE_TOOLS == {"pause_menu_item", "create_promotion"}
+    assert set(INVENTORY.tools) & WRITE_TOOLS == {"propose_purchase"}
     assert not set(SALES.tools) & WRITE_TOOLS
     assert not set(OPERATIONS.tools) & WRITE_TOOLS
 
