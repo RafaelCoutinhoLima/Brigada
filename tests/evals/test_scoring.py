@@ -174,3 +174,14 @@ def test_markdown_emphasis_does_not_hide_a_phrase() -> None:
     # A real answer from the live run, marked wrong before the fix.
     assert is_correct(case, _ans("**Resposta curta: o canal *app* zerou completamente.**"))
     assert is_correct(case, _ans("Zero pedidos pelo `app` ontem."))
+
+
+def test_scoped_refusal_counts_as_refusal() -> None:
+    from evals.cases import load_cases
+
+    case = next(c for c in load_cases() if c.id == "oos-002")
+    # A real answer from the live run: a correct refusal the scorer used to miss.
+    answer = (
+        "Desculpe, só tenho acesso aos dados do restaurante Sabor da Casa, não ao Sushi Kaigan."
+    )
+    assert is_correct(case, _ans(answer))

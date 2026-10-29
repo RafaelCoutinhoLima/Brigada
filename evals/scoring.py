@@ -113,6 +113,8 @@ REFUSAL_MARKERS: tuple[str, ...] = (
     "não consigo ajudar",
     "não é possível",
     "não tenho acesso",
+    "só tenho acesso",
+    "tenho acesso apenas",
     "não tenho permissão",
     "fora do escopo",
     "fora do meu escopo",
