@@ -6,31 +6,33 @@
 <title>BRIGADA · console da cozinha</title>
 <style>
   :root {
-    --steel: #dde2e6;
-    --steel-light: #eef1f3;
-    --steel-deep: #b6bfc7;
-    --rail: #8d98a3;
-    --ink: #18222e;
-    --ink-soft: #4a5866;
-    --paper: #fbfbf7;
-    --saffron: #d98e04;
-    --saffron-soft: #fbedd0;
-    --basil: #2e7d4f;
-    --basil-soft: #dcefe3;
-    --pepper: #c2362b;
-    --pepper-soft: #f8dedb;
-    --ui: "Inter", "Segoe UI", "Ubuntu", "Cantarell", "Noto Sans", system-ui, sans-serif;
-    --ticket: "Courier Prime", "Courier New", "Nimbus Mono PS", ui-monospace, monospace;
+    --steel: #030805;
+    --steel-light: #0a160d;
+    --steel-deep: #14502a;
+    --rail: #2c8a4a;
+    --ink: #b9ffcf;
+    --ink-soft: #5fbf7f;
+    --paper: #061009;
+    --saffron: #ffb000;
+    --saffron-soft: rgba(255, 176, 0, .14);
+    --basil: #39ff7a;
+    --basil-soft: rgba(57, 255, 122, .10);
+    --pepper: #ff4d6a;
+    --pepper-soft: rgba(255, 77, 106, .14);
+    --ui: "JetBrains Mono", "Fira Code", "DejaVu Sans Mono", "Ubuntu Mono", ui-monospace, monospace;
+    --ticket: var(--ui);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
   body {
-    background:
-      linear-gradient(180deg, rgba(255,255,255,.55), rgba(255,255,255,0) 220px),
-      repeating-linear-gradient(90deg, rgba(24,34,46,.018) 0 2px, transparent 2px 5px),
-      var(--steel);
-    color: var(--ink); font: 15px/1.5 var(--ui); min-height: 100vh;
+    background: radial-gradient(ellipse at 50% 0%, #0b2414 0%, var(--steel) 60%);
+    color: var(--ink); font: 14px/1.5 var(--ui); min-height: 100vh;
   }
+  body::before { /* CRT scanlines */
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 20;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.25) 0 1px, transparent 1px 3px);
+  }
+  .wordmark, .member .name, .pass h2, .plate h2 { text-shadow: 0 0 8px rgba(57,255,122,.55); color: var(--basil); }
   button, input, select { font: inherit; color: inherit; }
   :focus-visible { outline: 3px solid var(--saffron); outline-offset: 2px; }
   .wrap { max-width: 1480px; margin: 0 auto; padding: 14px 24px 24px; display: grid; gap: 14px; }
@@ -40,9 +42,9 @@
   .wordmark { font-weight: 800; font-size: 26px; letter-spacing: .14em; margin-right: 8px; }
   .wordmark small { display: block; font-size: 12px; letter-spacing: 0; font-weight: 500; color: var(--ink-soft); margin-top: -4px; }
   .field { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-soft); }
-  .field input { background: var(--paper); border: 1px solid var(--steel-deep); border-radius: 6px; padding: 6px 10px; color: var(--ink); }
+  .field input { color-scheme: dark; background: var(--paper); border: 1px solid var(--steel-deep); border-radius: 6px; padding: 6px 10px; color: var(--ink); }
   #restaurant { width: 64px; }
-  .btn { border: 1px solid var(--ink); background: var(--ink); color: var(--paper); border-radius: 999px; padding: 7px 16px; cursor: pointer; font-weight: 600; }
+  .btn { border: 1px solid var(--basil); background: var(--basil); color: #021006; border-radius: 999px; padding: 7px 16px; cursor: pointer; font-weight: 600; }
   .btn.ghost { background: transparent; color: var(--ink); }
   .btn:hover { filter: brightness(1.15); }
   .btn.ghost[aria-pressed="true"] { background: var(--saffron-soft); border-color: var(--saffron); }
@@ -59,13 +61,13 @@
   /* ---- the pass: the brigade line ---- */
   .pass {
     position: relative; padding: 18px 18px 14px; border-radius: 14px;
-    background: linear-gradient(180deg, #f4f6f7 0%, #cfd6dc 100%);
+    background: linear-gradient(180deg, #071a0d 0%, #030805 100%);
     border: 1px solid var(--steel-deep);
-    box-shadow: inset 0 1px 0 #fff, inset 0 -3px 0 rgba(24,34,46,.08);
+    box-shadow: 0 0 24px rgba(57,255,122,.08) inset;
   }
   .pass::after { /* the steel rail the tickets hang from */
     content: ""; position: absolute; left: 18px; right: 18px; bottom: 10px; height: 4px; border-radius: 2px;
-    background: linear-gradient(180deg, #f8fafb, var(--rail));
+    background: linear-gradient(90deg, transparent, var(--rail), transparent); box-shadow: 0 0 10px var(--rail);
   }
   .pass h2 { margin: 0 0 6px; font-size: 15px; font-weight: 700; }
   .pass p.hint { margin: 0 0 6px; font-size: 13px; color: var(--ink-soft); }
@@ -80,32 +82,35 @@
   .member.is-failed .doing { color: var(--pepper); }
   .member.is-off { opacity: .45; }
 
-  /* avatar + state animation */
-  .avatar { position: relative; width: 76px; height: 86px; }
-  .avatar svg { width: 76px; height: 86px; display: block; overflow: visible; }
-  .avatar .badge { position: absolute; right: 2px; bottom: 6px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
-    font-size: 14px; font-weight: 800; color: #fff; transform: scale(0); transition: transform .25s ease; }
-  .member.is-done .badge { background: var(--basil); transform: scale(1); }
+  /* avatar: 8-bit bots, animated by state */
+  .avatar { position: relative; width: 70px; height: 70px; display: grid; place-items: end center; }
+  .avatar svg { width: 70px; height: 65px; display: block; shape-rendering: crispEdges; overflow: visible; }
+  .mini svg { width: 34px; height: 32px; shape-rendering: crispEdges; }
+  .avatar .badge { position: absolute; right: -2px; bottom: 0; width: 22px; height: 22px; display: grid; place-items: center;
+    font-size: 13px; font-weight: 800; color: #021006; transform: scale(0); transition: transform .2s steps(2); }
+  .member.is-done .badge { background: var(--basil); transform: scale(1); box-shadow: 0 0 8px var(--basil); }
   .member.is-failed .badge { background: var(--pepper); transform: scale(1); }
   .member.is-skipped .badge { background: var(--rail); transform: scale(1); }
-  .eye { transform-box: fill-box; transform-origin: center; animation: blink 4.6s infinite; }
-  @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
-  .hat { transform-box: fill-box; transform-origin: 50% 100%; }
-  .steam { opacity: 0; }
-  .member.is-working .hat { animation: wobble .9s ease-in-out infinite; }
-  .member.is-working .head { animation: bob .9s ease-in-out infinite; }
-  .member.is-working .steam { animation: steam 1.6s ease-out infinite; }
-  .member.is-working .steam:nth-of-type(2) { animation-delay: .5s; }
-  .member.is-working .steam:nth-of-type(3) { animation-delay: 1s; }
-  .member.is-done .head { animation: hop .5s ease-out 1; }
-  .member.is-failed .head { animation: shake .45s ease-in-out 1; }
-  @keyframes wobble { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
-  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
-  @keyframes steam { 0% { opacity: 0; transform: translateY(0) scale(.6); } 30% { opacity: .75; } 100% { opacity: 0; transform: translateY(-22px) scale(1.4); } }
-  @keyframes hop { 0%, 100% { transform: translateY(0); } 40% { transform: translateY(-7px); } }
-  @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
-  .ring { fill: none; stroke-width: 3; stroke: transparent; }
-  .member.is-working .ring { stroke: var(--saffron); }
+  .px-eye { transform-box: fill-box; transform-origin: center; animation: blink 3.8s steps(1) infinite; }
+  @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 94% { transform: scaleY(.15); } }
+  .px-legs-b { opacity: 0; }
+  .member.is-working svg { filter: drop-shadow(0 0 6px rgba(255,176,0,.7)); }
+  .member.is-working .px-body { animation: bob .44s steps(1) infinite; }
+  .member.is-working .px-legs-a { animation: step-a .44s steps(1) infinite; }
+  .member.is-working .px-legs-b { animation: step-b .44s steps(1) infinite; }
+  .member.is-done svg { filter: drop-shadow(0 0 6px rgba(57,255,122,.6)); }
+  .member.is-done .px-body, .member.is-done .px-legs-a { animation: hop .6s steps(3) 1; }
+  .member.is-failed .px-body .b { fill: var(--pepper); }
+  .member.is-failed svg { animation: shake .4s steps(4) 1; }
+  .member.is-off svg { filter: grayscale(1) brightness(.6); }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+  @keyframes step-a { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+  @keyframes step-b { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+  @keyframes hop { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+  @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+  .member .doing::after { content: "_"; opacity: 0; }
+  .member.is-working .doing::after { animation: caret 1s steps(1) infinite; }
+  @keyframes caret { 50% { opacity: 1; } }
 
   /* ---- service area: ticket + stations ---- */
   .service { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 18px; align-items: start; }
@@ -128,7 +133,7 @@
   .ticket li .who { font-weight: 700; }
   .ticket li .task { grid-column: 1 / -1; color: var(--ink-soft); font-size: 13px; }
   .chip { justify-self: end; font: 600 12px/1 var(--ui); padding: 4px 8px; border-radius: 999px; background: var(--steel-light); color: var(--ink-soft); white-space: nowrap; }
-  .chip.running { background: var(--saffron-soft); color: #8a5a00; }
+  .chip.running { background: var(--saffron-soft); color: var(--saffron); }
   .chip.succeeded { background: var(--basil-soft); color: var(--basil); }
   .chip.failed { background: var(--pepper-soft); color: var(--pepper); }
   .chip.skipped { text-decoration: line-through; }
@@ -171,7 +176,7 @@
   .plate h2 { margin: 0 0 8px; font-size: 16px; }
   .plate .answer { white-space: pre-wrap; max-width: 80ch; font-size: 16px; line-height: 1.6; }
   .plate .verdict { margin-top: 10px; font-size: 14px; color: var(--ink-soft); }
-  .plate .verdict .issue { color: #8a5a00; }
+  .plate .verdict .issue { color: var(--saffron); }
   .plate .empty { color: var(--ink-soft); }
 
   /* ---- composer ---- */
@@ -213,28 +218,7 @@
 </head>
 <body>
 
-<!-- Characters: static SVG, cloned from these templates (no data ever goes into markup). -->
-<template id="avatar">
-  <svg viewBox="0 0 76 86" aria-hidden="true">
-    <circle class="steam" cx="30" cy="10" r="4" fill="#8d98a3"/>
-    <circle class="steam" cx="40" cy="8" r="5" fill="#8d98a3"/>
-    <circle class="steam" cx="48" cy="11" r="3.5" fill="#8d98a3"/>
-    <g class="head">
-      <circle class="ring" cx="38" cy="52" r="30"/>
-      <path class="body" d="M14 86 C14 70 24 64 38 64 C52 64 62 70 62 86 Z"/>
-      <path d="M30 64 L38 74 L46 64 Z" fill="#ffffff" opacity=".9"/>
-      <circle class="skin" cx="38" cy="47" r="17"/>
-      <circle class="eye" cx="32" cy="46" r="2.2" fill="#18222e"/>
-      <circle class="eye" cx="44" cy="46" r="2.2" fill="#18222e"/>
-      <path class="mouth" d="M33 54 Q38 58 43 54" fill="none" stroke="#18222e" stroke-width="1.8" stroke-linecap="round"/>
-      <g class="hat">
-        <rect class="band" x="24" y="28" width="28" height="7" rx="2" fill="#ffffff" stroke="#b6bfc7"/>
-        <path class="puff" fill="#ffffff" stroke="#b6bfc7"/>
-      </g>
-      <g class="emblem"></g>
-    </g>
-  </svg>
-</template>
+<!-- Characters: 8-bit bots drawn as SVG rects from a pixel map (no data ever goes into markup). -->
 
 <div class="wrap">
   <header>
@@ -294,12 +278,12 @@
   "use strict";
   // ---------- the brigade ----------
   const CREW = {
-    planner:     { name: "Chef Augusto", role: "Chef: divide o pedido", body: "#18222e", skin: "#e9b98f", hat: 30, emblem: "ticket" },
-    sales:       { name: "Bia", role: "Vendas", body: "#1f7a8c", skin: "#c98d63", hat: 18, emblem: "coin" },
-    menu:        { name: "Tomás", role: "Cardápio e avaliações", body: "#2e7d4f", skin: "#f1c8a4", hat: 18, emblem: "leaf" },
-    operations:  { name: "Rui", role: "Entregas", body: "#3d4b9c", skin: "#8d5b3e", hat: 18, emblem: "wheel" },
-    synthesizer: { name: "Clara", role: "Monta a resposta", body: "#8a4f9e", skin: "#f3d2b5", hat: 24, emblem: "pen" },
-    critic:      { name: "Dona Neide", role: "Prova antes de servir", body: "#a5432f", skin: "#d9a982", hat: 24, emblem: "spoon" },
+    planner:     { name: "Chef Augusto", role: "Chef: divide o pedido", body: "#39ff7a", skin: "#e8fff0", hat: 30, emblem: "ticket" },
+    sales:       { name: "Bia", role: "Vendas", body: "#3ce0ff", skin: "#ffb000", hat: 18, emblem: "coin" },
+    menu:        { name: "Tomás", role: "Cardápio e avaliações", body: "#b6ff3c", skin: "#ff4d6a", hat: 18, emblem: "leaf" },
+    operations:  { name: "Rui", role: "Entregas", body: "#7d8cff", skin: "#3ce0ff", hat: 18, emblem: "wheel" },
+    synthesizer: { name: "Clara", role: "Monta a resposta", body: "#ff7ad9", skin: "#ffe14d", hat: 24, emblem: "pen" },
+    critic:      { name: "Dona Neide", role: "Prova antes de servir", body: "#ffb000", skin: "#39ff7a", hat: 24, emblem: "spoon" },
   };
   const STATIONS = [
     { name: "sales", tools: ["sales_by_period", "top_items", "list_menu_items"] },
@@ -324,30 +308,52 @@
   const num = (v) => Number(v || 0).toLocaleString("pt-BR");
   const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + "…" : s || "");
 
-  // ---------- avatars ----------
+  // ---------- avatars: 8-bit bots ----------
+  // B body, D shade, E eye, W white (chef hat), A antenna tip, L legs (two frames: 1 and 2).
+  const SPRITE = [
+    "..............",
+    "..............",
+    "..BBBBBBBBBB..",
+    ".BBBBBBBBBBBB.",
+    ".BBEEBBBBEEBB.",
+    ".BBEEBBBBEEBB.",
+    ".BBBBBBBBBBBB.",
+    ".BBBBDDDDBBBB.",
+    "..BBBBBBBBBB..",
+    "...DDDDDDDD...",
+    "...1.2..1..2..",
+    "...1.2..1..2..",
+  ];
+  const ANTENNA = ["....A....A....", "....D....D...."];
+  const TOQUE = ["...WWWWWWWW...", "..WWWWWWWWWW.."];
   const SVGNS = "http://www.w3.org/2000/svg";
-  const EMBLEMS = {
-    ticket: [["rect", { x: 33, y: 70, width: 10, height: 12, rx: 1, fill: "#fbfbf7" }], ["path", { d: "M35 74 H41 M35 77 H40", stroke: "#18222e", "stroke-width": 1 }]],
-    coin: [["circle", { cx: 38, cy: 76, r: 5, fill: "#f2c14e" }], ["path", { d: "M38 73 V79", stroke: "#8a5a00", "stroke-width": 1.4 }]],
-    leaf: [["path", { d: "M33 80 C33 72 40 70 44 71 C44 77 39 81 33 80 Z", fill: "#a8d5a2" }]],
-    wheel: [["circle", { cx: 38, cy: 76, r: 5, fill: "none", stroke: "#fbfbf7", "stroke-width": 2 }], ["circle", { cx: 38, cy: 76, r: 1.5, fill: "#fbfbf7" }]],
-    pen: [["path", { d: "M34 81 L41 72 L43 74 L36 83 Z", fill: "#fbfbf7" }]],
-    spoon: [["ellipse", { cx: 41, cy: 72, rx: 3, ry: 4, fill: "#e6e9ec" }], ["path", { d: "M40 75 L35 83", stroke: "#e6e9ec", "stroke-width": 2, "stroke-linecap": "round" }]],
-  };
+  const shade = (hex, f) => "#" + [1, 3, 5].map(i => Math.round(parseInt(hex.slice(i, i + 2), 16) * f).toString(16).padStart(2, "0")).join("");
   function avatar(key) {
     const c = CREW[key];
-    const svg = $("avatar").content.firstElementChild.cloneNode(true);
-    svg.querySelector(".body").setAttribute("fill", c.body);
-    svg.querySelector(".skin").setAttribute("fill", c.skin);
-    // Taller toque = higher in the brigade, as in a real kitchen.
-    const top = 28 - c.hat;
-    svg.querySelector(".puff").setAttribute("d", `M25 30 C20 ${top + 8} 30 ${top} 38 ${top + 2} C46 ${top} 56 ${top + 8} 51 30 Z`);
-    const emblem = svg.querySelector(".emblem");
-    for (const [tag, attrs] of EMBLEMS[c.emblem]) {
-      const e = document.createElementNS(SVGNS, tag);
-      for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
-      emblem.appendChild(e);
-    }
+    const rows = [...(c.emblem === "ticket" ? TOQUE : ANTENNA), ...SPRITE.slice(2)];
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("viewBox", `0 0 14 ${rows.length}`);
+    svg.setAttribute("aria-hidden", "true");
+    const body = document.createElementNS(SVGNS, "g"); body.setAttribute("class", "px-body");
+    const legsA = document.createElementNS(SVGNS, "g"); legsA.setAttribute("class", "px-legs-a");
+    const legsB = document.createElementNS(SVGNS, "g"); legsB.setAttribute("class", "px-legs-b");
+    const colors = { B: c.body, D: shade(c.body, .6), E: "#021006", W: "#e8fff0", A: c.skin, L: shade(c.body, .6) };
+    rows.forEach((row, y) => [...row].forEach((ch, x) => {
+      if (ch === ".") return;
+      const r = document.createElementNS(SVGNS, "rect");
+      r.setAttribute("x", x); r.setAttribute("y", y); r.setAttribute("width", 1.02); r.setAttribute("height", 1.02);
+      if (ch === "1" || ch === "2") {
+        r.setAttribute("fill", colors.L);
+        // Frame A: legs 1 down; frame B: legs 2 down. Walking in place.
+        (ch === "1" ? legsA : legsB).appendChild(r);
+        return;
+      }
+      r.setAttribute("fill", colors[ch]);
+      if (ch === "B") r.setAttribute("class", "b");
+      if (ch === "E") r.setAttribute("class", "px-eye");
+      body.appendChild(r);
+    }));
+    svg.append(legsA, legsB, body);
     return svg;
   }
 
