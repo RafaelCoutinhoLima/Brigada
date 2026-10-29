@@ -545,7 +545,7 @@ def spec(w: World) -> list[Case]:
             expected=EntityExpected(
                 value=top_with_margin(w.rating_ranking(3), "best rated r3", min_margin=0.05),
             ),
-            expected_tools=["reviews_for_item"],
+            expected_tools=["ratings_by_item"],
             subsets=CI,
         ),
         Case(
