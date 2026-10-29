@@ -168,3 +168,32 @@ async def test_long_digit_runs_do_not_crash_the_orchestration() -> None:
         QUESTION_WITH_ID, 1, TODAY, client=client, server_factory=build_server
     )
     assert result.text == "Não achei o pedido."
+
+
+@pytest.mark.db
+async def test_planner_knows_the_restaurant_name_to_refuse_other_restaurants() -> None:
+    import os
+    import uuid as _uuid
+
+    import psycopg
+
+    from brigada.orchestration.store import OrchestrationStore
+
+    oid = f"test-{_uuid.uuid4().hex}"
+    client = RoleClient(planner=[plan(direct="Só tenho acesso aos dados do Sabor da Casa.")])
+    try:
+        await orchestrate(
+            "Quanto o Sushi Kaigan faturou ontem?",
+            2,
+            TODAY,
+            client=client,
+            server_factory=build_server,
+            orchestrations=OrchestrationStore(os.environ["DATABASE_URL"]),
+            orchestration_id=oid,
+        )
+    finally:
+        with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+            conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
+    system = client.messages.requests["planner"][0]["system"]
+    assert "restaurante do dono: Sabor da Casa (restaurant_id 2)" in system
+    assert "outro restaurante" in system  # the rule the name is there for

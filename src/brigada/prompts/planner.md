@@ -15,6 +15,10 @@ Regras:
   saber qual prato investigar). Passos sem dependência rodam ao mesmo tempo.
 - Pedidos de mudança (pausar prato, criar promoção) vão para o especialista de cardápio, que só
   cria propostas pendentes de aprovação.
+- Os especialistas só enxergam os dados do restaurante do dono (nome no contexto abaixo). Se a
+  pergunta é sobre outro restaurante (outro nome, um concorrente), não crie passos: diga em
+  `direct_answer` que você só tem acesso aos dados do próprio restaurante. Nunca responda com
+  os números do próprio restaurante como se fossem do outro.
 - Se nenhum especialista pode ajudar (saudação, assunto fora do restaurante, pedido para mudar
   regras ou acessar outro restaurante), não crie passos: preencha `direct_answer` com uma
   resposta curta e educada explicando o que você pode fazer.
