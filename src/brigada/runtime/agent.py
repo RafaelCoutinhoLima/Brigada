@@ -14,6 +14,7 @@ from typing import Any, Protocol
 import anthropic
 from anthropic.types import Message, MessageParam, ToolParam
 
+from brigada.config import get_settings
 from brigada.observability.tracing import agent_step_span, record_usage, tool_span
 from brigada.runtime.retry import DEFAULT_POLICY, RetryPolicy, with_retry
 from brigada.runtime.tools import ToolExecutor, run_tools
@@ -81,9 +82,20 @@ class AgentConfig:
     tool_choice: dict[str, Any] | None = None
 
 
-def make_client(api_key: str | None = None, timeout_seconds: float = 60.0) -> ModelClient:
-    """Async client with SDK retries off: ``with_retry`` owns retrying (see retry.py)."""
-    return anthropic.AsyncAnthropic(api_key=api_key, max_retries=0, timeout=timeout_seconds)
+def make_client(timeout_seconds: float = 60.0) -> ModelClient:
+    """The configured provider's client, with retries off: ``with_retry`` owns retrying."""
+    settings = get_settings()
+    if settings.model_provider == "openrouter":
+        from brigada.runtime.openrouter import OpenRouterClient
+
+        return OpenRouterClient(
+            settings.openrouter_api_key,
+            base_url=settings.openrouter_base_url,
+            timeout_seconds=timeout_seconds,
+        )
+    return anthropic.AsyncAnthropic(
+        api_key=settings.anthropic_api_key or None, max_retries=0, timeout=timeout_seconds
+    )
 
 
 @dataclass

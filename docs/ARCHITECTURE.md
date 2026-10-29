@@ -23,6 +23,9 @@
    extra round; if the answer is still rejected it ships with the critic's caveats. See ADR 0003.
 8. The answer is returned with the full trace id and the orchestration id.
 
+Model provider: Anthropic by default; OpenRouter through an adapter that speaks the same
+Messages shape (`runtime/openrouter.py`, ADR 0004), selected by `MODEL_PROVIDER`.
+
 ## Components
 
 | Component | Path | Responsibility |

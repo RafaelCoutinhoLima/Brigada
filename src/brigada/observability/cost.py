@@ -169,7 +169,13 @@ class UsageLike(Protocol):
 
 
 def cost_from_usage(model: str, usage: UsageLike) -> Decimal:
-    """Cost of a response given its ``anthropic`` ``Usage`` object (``response.usage``)."""
+    """Cost of a response given its ``anthropic`` ``Usage`` object (``response.usage``).
+
+    OpenRouter's ``:free`` models cost nothing by definition; any other unknown model still
+    raises, so a paid model never shows up as free by accident.
+    """
+    if model.endswith(":free"):
+        return Decimal(0)
     speed = getattr(usage, "speed", None)
     if speed not in (None, "standard"):
         raise UnsupportedPricingError(f"speed={speed!r} pricing is not modelled in cost.py")

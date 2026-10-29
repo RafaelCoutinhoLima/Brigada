@@ -63,18 +63,18 @@ _Filled in as modules ship._
 
 ## Stack
 
-Python 3.12 · FastAPI · Anthropic SDK (no agent framework) · MCP Python SDK · Postgres + pgvector (Supabase) · scikit-learn · OpenTelemetry · GitHub Actions · Docker · Railway
+Python 3.12 · FastAPI · Anthropic SDK (no agent framework) · OpenRouter adapter · MCP Python SDK · Postgres + pgvector (Supabase) · scikit-learn · OpenTelemetry · GitHub Actions · Docker · Railway
 
 ## Running locally
 
 ```bash
-cp .env.example .env          # add your ANTHROPIC_API_KEY and DATABASE_URL
+cp .env.example .env          # add a model API key (Anthropic, or OpenRouter) and DATABASE_URL
 docker compose up -d db       # Postgres + pgvector; set BRIGADA_DB_PORT if 5432 is taken
 uv sync
 uv run python scripts/seed_data.py --reset
 uv run pytest                 # add -m db to run tests against the database
 
-# ask a specialist (needs ANTHROPIC_API_KEY); every step is saved in `runs`/`steps`
+# ask a specialist (needs a model API key); every step is saved in `runs`/`steps`
 uv run python -m brigada.runtime "Quanto vendi ontem?" --restaurant 1 --today 2026-10-28
 uv run python -m brigada.runtime "Qual prato tem mais reclamações?" --agent menu --restaurant 2
 uv run python -m brigada.runtime "Onde as entregas atrasam?" --agent operations --restaurant 3

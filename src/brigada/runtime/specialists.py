@@ -161,7 +161,7 @@ def _agent(
             max_steps=settings.max_agent_steps,
             tool_timeout_seconds=settings.tool_timeout_seconds,
         ),
-        client or make_client(settings.anthropic_api_key or None),
+        client or make_client(),
         tools,
         executor,
     )
