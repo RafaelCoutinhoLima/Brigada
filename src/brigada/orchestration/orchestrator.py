@@ -93,7 +93,7 @@ async def orchestrate(
         question,
         restaurant_id,
         today,
-        client or make_client(get_settings().anthropic_api_key or None),
+        client or make_client(),
         server_factory,
         runs,
         orchestrations,

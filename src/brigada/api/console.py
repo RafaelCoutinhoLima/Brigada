@@ -238,10 +238,10 @@ async def console_dispatch(
     """Start the orchestrator, or one run per chosen specialist in parallel. Returns at once;
     poll /console/runs."""
     require_restaurant(body.restaurant_id, allowed)
-    if not settings.anthropic_api_key:
+    if not settings.model_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ANTHROPIC_API_KEY is not configured on the server",
+            detail=f"{settings.model_provider.upper()}_API_KEY is not configured on the server",
         )
     agents = list(dict.fromkeys(body.agents))  # dedupe, keep order
     _reserve(body.restaurant_id, ORCHESTRATION_WEIGHT if body.orchestrate else len(agents))
