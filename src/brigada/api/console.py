@@ -161,7 +161,29 @@ def console_page() -> HTMLResponse:
 
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
-_PROXY_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded")
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+_PROXY_HEADERS = ("forwarded", "via", "x-real-ip", "cf-connecting-ip", "true-client-ip")
+
+
+def _is_local_request(request: Request) -> bool:
+    """Loopback peer, loopback Host, same-origin, and no sign of a proxy.
+
+    The Host check defeats DNS rebinding (a hostile site whose name resolves to 127.0.0.1 still
+    sends its own name as Host); Sec-Fetch-Site rejects cross-site fetches from the browser.
+    """
+    peer = request.client.host if request.client else ""
+    raw = request.headers.get("host", "")
+    host = raw.split("]")[0] + "]" if raw.startswith("[") else raw.rsplit(":", 1)[0]
+    fetch_site = request.headers.get("sec-fetch-site", "same-origin")
+    proxied = any(h in request.headers for h in _PROXY_HEADERS) or any(
+        h.startswith("x-forwarded-") for h in request.headers
+    )
+    return (
+        peer in _LOOPBACK
+        and host in _LOOPBACK_HOSTS
+        and fetch_site in ("same-origin", "none")
+        and not proxied
+    )
 
 
 @router.get("/local-session", include_in_schema=False)
@@ -175,9 +197,7 @@ def console_local_session(
     looks like 127.0.0.1, so without the header check the key would be served to the internet.
     """
     key = settings.console_local_key
-    host = request.client.host if request.client else ""
-    proxied = any(h in request.headers for h in _PROXY_HEADERS)
-    if not key or host not in _LOOPBACK or proxied or key not in settings.api_key_scopes():
+    if not key or not _is_local_request(request) or key not in settings.api_key_scopes():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return {"key": key}
 
