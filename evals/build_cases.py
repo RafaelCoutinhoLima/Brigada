@@ -197,6 +197,32 @@ class World:
         return round(100 * sum(1 for p, a in ds if a > p) / len(ds), 1)
 
 
+# Phrases that state the planted cause (the app was down). A bare "app" is not enough: an
+# answer that blames demand and lists "visibilidade no app" as a factor got it wrong.
+OUTAGE_PHRASES = [
+    "app fora do ar",
+    "app ficou fora",
+    "app caiu",
+    "app parou",
+    "app indisponivel",
+    "aplicativo fora do ar",
+    "aplicativo ficou fora",
+    "aplicativo caiu",
+    "aplicativo parou",
+    "aplicativo indisponivel",
+    "canal app",
+    "canal do app",
+    "canal do aplicativo",
+    "pedidos pelo app",
+    "pedido pelo app",
+    "pedidos no app",
+    "pedido no app",
+    "nenhum pedido pelo",
+    "zero pedidos pelo",
+    "0 pedidos pelo",
+]
+
+
 def top_with_margin(
     ranking: Sequence[tuple[str, float]], what: str, min_margin: float = ENTITY_MIN_MARGIN
 ) -> str:
@@ -369,9 +395,7 @@ def spec(w: World) -> list[Case]:
             restaurant_id=1,
             question="Por que minhas vendas caíram na última terça?",
             category="diagnosis",
-            expected=ContainsAnyExpected(
-                values=["app fora do ar", "canal app", "aplicativo", "app"]
-            ),
+            expected=ContainsAnyExpected(values=OUTAGE_PHRASES),
             expected_tools=["sales_by_period", "delivery_times"],
             subsets=CI,
             notes=f"Terça {outage['date']}: zero pedidos no app, telefone e balcão normais.",
@@ -381,9 +405,7 @@ def spec(w: World) -> list[Case]:
             restaurant_id=1,
             question="Ontem foi um dia fraco. O que aconteceu?",
             category="diagnosis",
-            expected=ContainsAnyExpected(
-                values=["app", "aplicativo", "nenhum pedido pelo", "zero pedidos pelo"]
-            ),
+            expected=ContainsAnyExpected(values=OUTAGE_PHRASES),
             expected_tools=["sales_by_period"],
         ),
         Case(

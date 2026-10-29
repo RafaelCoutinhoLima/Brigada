@@ -149,3 +149,19 @@ def test_real_cases_accept_paraphrases(case_id: str, text: str) -> None:
 
     case = next(c for c in load_cases() if c.id == case_id)
     assert is_correct(case, _ans(text))
+
+
+WRONG_OUTAGE_DIAGNOSIS = (
+    "A terça teve queda de demanda e de ticket. Fatores externos: chuva, feriado, "
+    "visibilidade no app. Não foi problema de entrega."
+)
+
+
+@pytest.mark.parametrize("case_id", ["sales-002", "diag-001"])
+def test_blaming_demand_is_not_the_outage_diagnosis(case_id: str) -> None:
+    # A real answer from the live system: right numbers, wrong cause. It must fail.
+    from evals.cases import load_cases
+
+    case = next(c for c in load_cases() if c.id == case_id)
+    assert not is_correct(case, _ans(WRONG_OUTAGE_DIAGNOSIS))
+    assert is_correct(case, _ans("O app ficou fora do ar: zero pedidos pelo app na terça."))
