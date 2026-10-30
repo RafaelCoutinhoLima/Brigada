@@ -619,7 +619,7 @@
     const what = a.subject || `#${p.menu_item_id ?? p.ingredient_id}`;
     if (a.kind === "pause_menu_item") return `Pausar ${what}`;
     if (a.kind === "create_promotion") return `Promoção de ${p.discount_pct}% em ${what}, de ${p.start_date} a ${p.end_date}`;
-    if (a.kind === "propose_purchase") return `Comprar ${p.qty} de ${what}`;
+    if (a.kind === "propose_purchase") return `Comprar ${Number(p.qty).toLocaleString("pt-BR")} ${a.unit || ""} de ${what}`;
     return a.kind;
   }
   function renderApprovals(list) {

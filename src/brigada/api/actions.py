@@ -33,24 +33,30 @@ class DecisionRequest(BaseModel):
 
 class ActionView(PendingAction):
     subject: str | None = Field(description="Name of the dish or ingredient the action is about.")
+    unit: str | None = Field(description="The ingredient's unit, for purchases (kg, un, l).")
 
 
 def _with_subjects(items: list[PendingAction]) -> list[ActionView]:
     """Resolve the names the owner reads, inside each action's own restaurant."""
     dishes = {(a.restaurant_id, a.payload.get("menu_item_id")) for a in items}
     ingredients = {(a.restaurant_id, a.payload.get("ingredient_id")) for a in items}
-    names: dict[tuple[str, int, object], str] = {}
+    names: dict[tuple[str, int, object], tuple[str, str | None]] = {}
     with connect() as conn:
-        for table, keys in (("menu_items", dishes), ("ingredients", ingredients)):
+        for table, unit, keys in (
+            ("menu_items", "NULL", dishes),
+            ("ingredients", "unit", ingredients),
+        ):
             pairs = [(r, i) for r, i in keys if isinstance(i, int)]
             if not pairs:
                 continue
             rows = conn.execute(
-                f"SELECT restaurant_id, id, name FROM {table} "  # noqa: S608 - fixed names
+                f"SELECT restaurant_id, id, name, {unit} AS unit FROM {table} "  # noqa: S608 - fixed names
                 "WHERE (restaurant_id, id) IN (SELECT * FROM unnest(%s::bigint[], %s::bigint[]))",
                 ([r for r, _ in pairs], [i for _, i in pairs]),
             ).fetchall()
-            names.update({(table, r["restaurant_id"], r["id"]): r["name"] for r in rows})
+            names.update(
+                {(table, r["restaurant_id"], r["id"]): (r["name"], r["unit"]) for r in rows}
+            )
     out = []
     for a in items:
         table, key = (
@@ -58,11 +64,8 @@ def _with_subjects(items: list[PendingAction]) -> list[ActionView]:
             if "ingredient_id" in a.payload
             else ("menu_items", "menu_item_id")
         )
-        out.append(
-            ActionView(
-                **a.model_dump(), subject=names.get((table, a.restaurant_id, a.payload.get(key)))
-            )
-        )
+        name, unit = names.get((table, a.restaurant_id, a.payload.get(key)), (None, None))
+        out.append(ActionView(**a.model_dump(), subject=name, unit=unit))
     return out
 
 
