@@ -48,9 +48,10 @@ def _clean_actor(name: str) -> str:
     return name
 
 
-def _lock_pending(conn: Conn, action_id: int) -> PendingAction:
+def _lock_pending(conn: Conn, action_id: int, scope: frozenset[int] | None) -> PendingAction:
     row = conn.execute(f"{_SELECT} WHERE id = %s FOR UPDATE", (action_id,)).fetchone()
-    if row is None:
+    # Out of scope looks exactly like missing: a caller cannot probe other restaurants' ids.
+    if row is None or (scope is not None and row["restaurant_id"] not in scope):
         raise NotFoundError(f"pending action {action_id} does not exist")
     action = _to_model(row)
     if action.status != "pending":
@@ -104,12 +105,13 @@ def _decide(
     note: str | None,
     apply: Callable[[Conn, PendingAction], dict[str, Any] | None],
     new_status: ActionStatus,
+    scope: frozenset[int] | None,
 ) -> PendingAction:
     actor = _clean_actor(actor)
     args = {"action_id": action_id, "note": note}
     try:
         with connect() as conn, conn.transaction():
-            action = _lock_pending(conn, action_id)
+            action = _lock_pending(conn, action_id, scope)
             effect = apply(conn, action)
             row = conn.execute(
                 "UPDATE pending_actions SET status = %s, decided_by = %s, decided_at = now(), "
@@ -135,22 +137,51 @@ def _decide(
         raise
 
 
-def approve(action_id: int, approved_by: str, note: str | None = None) -> PendingAction:
-    """Execute a pending action on behalf of a human. Raises if it is not pending."""
-    return _decide("human.approve", action_id, approved_by, note, _execute, "executed")
+def approve(
+    action_id: int,
+    approved_by: str,
+    note: str | None = None,
+    *,
+    restaurant_ids: frozenset[int] | None = None,
+) -> PendingAction:
+    """Execute a pending action on behalf of a human. Raises if it is not pending.
+
+    ``restaurant_ids`` limits which restaurants' actions the caller may decide (the HTTP API
+    passes the API key's scope); ``None`` is the trusted CLI, which sees everything.
+    """
+    return _decide(
+        "human.approve", action_id, approved_by, note, _execute, "executed", restaurant_ids
+    )
 
 
-def reject(action_id: int, rejected_by: str, note: str | None = None) -> PendingAction:
+def reject(
+    action_id: int,
+    rejected_by: str,
+    note: str | None = None,
+    *,
+    restaurant_ids: frozenset[int] | None = None,
+) -> PendingAction:
     """Reject a pending action without applying it. Raises if it is not pending."""
-    return _decide("human.reject", action_id, rejected_by, note, lambda _c, _a: None, "rejected")
+    return _decide(
+        "human.reject",
+        action_id,
+        rejected_by,
+        note,
+        lambda _c, _a: None,
+        "rejected",
+        restaurant_ids,
+    )
 
 
-def list_actions(status: ActionStatus | None = "pending") -> list[PendingAction]:
-    """List actions, oldest first. ``status=None`` lists all."""
+def list_actions(
+    status: ActionStatus | None = "pending", *, restaurant_ids: frozenset[int] | None = None
+) -> list[PendingAction]:
+    """List actions, oldest first. ``status=None`` lists all; ``restaurant_ids`` limits scope."""
     with connect() as conn:
         rows = conn.execute(
-            f"{_SELECT} WHERE (%(s)s::text IS NULL OR status = %(s)s::text) ORDER BY id",
-            {"s": status},
+            f"{_SELECT} WHERE (%(s)s::text IS NULL OR status = %(s)s::text) "
+            "AND (%(r)s::bigint[] IS NULL OR restaurant_id = ANY(%(r)s::bigint[])) ORDER BY id",
+            {"s": status, "r": sorted(restaurant_ids) if restaurant_ids is not None else None},
         ).fetchall()
     return [_to_model(r) for r in rows]
 
