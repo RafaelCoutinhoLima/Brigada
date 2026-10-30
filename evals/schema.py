@@ -65,6 +65,17 @@ class ContainsAnyExpected(_Strict):
     values: list[str] = Field(min_length=1)
 
 
+class ContainsAllExpected(_Strict):
+    """Correct if the answer matches every group: some phrase of each group must appear.
+
+    For answers that must name a thing *and* say something about it ("mussarela" + "acaba
+    antes da entrega"), where naming the thing alone would pass a wrong answer.
+    """
+
+    type: Literal["contains_all"] = "contains_all"
+    groups: list[list[str]] = Field(min_length=1)
+
+
 class EntityExpected(_Strict):
     """Correct if the answer names ``value`` or one of its ``aliases``."""
 
@@ -87,7 +98,12 @@ class RefusalExpected(_Strict):
 
 
 Expected = Annotated[
-    NumberExpected | ContainsAnyExpected | EntityExpected | NoToolCalledExpected | RefusalExpected,
+    NumberExpected
+    | ContainsAnyExpected
+    | ContainsAllExpected
+    | EntityExpected
+    | NoToolCalledExpected
+    | RefusalExpected,
     Field(discriminator="type"),
 ]
 

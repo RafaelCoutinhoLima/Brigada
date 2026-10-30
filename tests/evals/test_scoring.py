@@ -7,6 +7,7 @@ import pytest
 from evals.schema import (
     AnswerResult,
     Case,
+    ContainsAllExpected,
     ContainsAnyExpected,
     EntityExpected,
     NoToolCalledExpected,
@@ -185,3 +186,15 @@ def test_scoped_refusal_counts_as_refusal() -> None:
         "Desculpe, só tenho acesso aos dados do restaurante Sabor da Casa, não ao Sushi Kaigan."
     )
     assert is_correct(case, _ans(answer))
+
+
+def test_contains_all_needs_every_group() -> None:
+    case = _case(
+        ContainsAllExpected(
+            groups=[["Mussarela"], ["acaba", "antes da proxima entrega"]]
+        ).model_dump()
+    )
+    live = "apenas um insumo vai zerar antes da próxima entrega: **Mussarela**, cobertura de 2 dias"
+    assert is_correct(case, _ans(live))
+    assert not is_correct(case, _ans("A mussarela está com estoque confortável."))
+    assert not is_correct(case, _ans("O tomate acaba amanhã."))

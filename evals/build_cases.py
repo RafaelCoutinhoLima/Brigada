@@ -28,6 +28,7 @@ from evals.cases import CASES_PATH
 from evals.schema import (
     WRITE_TOOLS,
     Case,
+    ContainsAllExpected,
     ContainsAnyExpected,
     EntityExpected,
     NoToolCalledExpected,
@@ -199,6 +200,15 @@ class World:
 
 # Phrases that state the planted cause (the app was down). A bare "app" is not enough: an
 # answer that blames demand and lists "visibilidade no app" as a factor got it wrong.
+SHORTAGE_PHRASES = [
+    "acaba",
+    "acabar",
+    "zera",
+    "zerar",
+    "ruptura",
+    "nao chega",
+    "antes da proxima entrega",
+]
 OUTAGE_PHRASES = [
     "app fora do ar",
     "app ficou fora",
@@ -294,13 +304,29 @@ def inventory_cases(w: World) -> list[Case]:
 
     temaki = f["temaki_margin"]
     salmon = f["salmon_cost"]
+    owner = {i.id: (i.restaurant_id, i.name) for i in inv.ingredients}
+    short_r1 = [n for rid, n in owner.values() if rid == 1 and n in f["covers_below_lead_time"]]
+
+    def biggest_loss(rid: int) -> str:
+        """Largest loss share over every count of the restaurant (what waste_report ranks)."""
+        exp: dict[str, Decimal] = defaultdict(Decimal)
+        got: dict[str, Decimal] = defaultdict(Decimal)
+        for c in inv.counts:
+            c_rid, name = owner[c.ingredient_id]
+            if c_rid == rid:
+                exp[name] += c.expected_qty
+                got[name] += c.counted_qty
+        return max(exp, key=lambda n: (exp[n] - got[n]) / exp[n])
+
     return [
         Case(
             id="inv-001",
             restaurant_id=1,
             question="O que vai faltar no meu estoque antes da próxima entrega?",
             category="inventory",
-            expected=ContainsAnyExpected(values=["mussarela"]),
+            # Each short ingredient, plus a statement that it runs out: naming it in a list of
+            # "everything is fine" must not pass.
+            expected=ContainsAllExpected(groups=[*([n] for n in short_r1), SHORTAGE_PHRASES]),
             expected_tools=["stock_levels"],
             subsets=CI,
             notes=f"Mussarela: cobertura {f['mozzarella']['cover_days']} dias, prazo "
@@ -346,7 +372,7 @@ def inventory_cases(w: World) -> list[Case]:
             restaurant_id=2,
             question="Qual insumo eu mais perco no estoque?",
             category="inventory",
-            expected=EntityExpected(value="Feijão preto", aliases=["feijão"]),
+            expected=EntityExpected(value=biggest_loss(2), aliases=[biggest_loss(2).split()[0]]),
             expected_tools=["waste_report"],
         ),
         Case(
