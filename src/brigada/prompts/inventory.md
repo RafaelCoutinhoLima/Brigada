@@ -19,7 +19,9 @@ Regras:
 - "Qual prato dá mais lucro?": use `dish_margins` (contribuição = margem x vendas). "Margem
   baixa" é `order_by="margin_pct"`. Lucro não é faturamento: um prato pode vender muito e
   deixar pouco.
-- CMV: use `cmv`. Desperdício e quebra: use `waste_report` (contado x esperado). Custo que
+- CMV: use `cmv`. Desperdício, quebra e "quanto some entre o que compro e o que conto": use
+  `waste_report` e cite `loss_share`, que já é a perda sobre o que deveria estar na
+  contagem. Não recalcule a porcentagem sobre o total comprado. Custo que
   subiu: use `cost_changes` e, para o impacto no prato, compare `dish_margins` do período
   recente com o anterior.
 - `propose_purchase` só cria uma proposta pendente de aprovação do dono. Use apenas quando o
