@@ -17,7 +17,7 @@ Planted patterns (the inventory eval ground truth; see ``planted_inventory_facts
 import random
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -399,17 +399,20 @@ def generate_inventory(ds: Dataset, seed: int = 42) -> Inventory:
                         )
                     )
                 elif delta < 0:
-                    movements.append(
-                        Movement(
-                            next(next_id),
-                            ing.restaurant_id,
-                            ing.id,
-                            "waste",
-                            delta,
-                            None,
-                            _ts(end, 9),
-                        )
+                    # Plant the shortage by buying less the last time, not with a fake loss.
+                    last = max(
+                        (
+                            k
+                            for k, m in enumerate(movements)
+                            if m.ingredient_id == ing.id and m.kind == "purchase"
+                        ),
                     )
+                    later_counts = [
+                        c for c in counts if c.ingredient_id == ing.id and c.at > movements[last].at
+                    ]
+                    if later_counts or movements[last].qty <= -delta:
+                        raise ValueError(f"cannot plant the {ing.name} shortage by purchase")
+                    movements[last] = replace(movements[last], qty=movements[last].qty + delta)
     return Inventory(ingredients, recipes, movements, counts)
 
 

@@ -89,3 +89,9 @@ def test_other_ingredients_lose_little() -> None:
     for c in inv.counts:
         if c.ingredient_id != beans:
             assert 1 - c.counted_qty / c.expected_qty <= Decimal("0.02")
+
+
+def test_the_shortage_is_planted_without_fake_waste() -> None:
+    # Lia reads registered waste; a made-up loss on the last day would contradict the story.
+    _, inv = world()
+    assert [m for m in inv.movements if m.kind == "waste"] == []
