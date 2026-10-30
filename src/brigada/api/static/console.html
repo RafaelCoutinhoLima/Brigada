@@ -639,8 +639,11 @@
       price.className = "field price"; price.setAttribute("aria-label", `Preço pago por ${o.unit} de ${o.ingredient}`);
       const b = el("button", "btn", "Recebido"); b.type = "button";
       b.onclick = () => receive(o.purchase_order_id, price.value, b);
-      acts.append(price, b);
-      li.append(acts, el("span", "why", `pedido aprovado em ${new Date(o.ordered_at).toLocaleString("pt-BR")}`));
+      const c = el("button", "btn no", "Cancelar"); c.type = "button";
+      c.onclick = () => cancelOrder(o.purchase_order_id, c);
+      acts.append(price, b, c);
+      const late = o.overdue ? " · ATRASADO: não conta mais como a caminho" : "";
+      li.append(acts, el("span", "why", `pedido aprovado em ${new Date(o.ordered_at).toLocaleString("pt-BR")}${late}`));
       ol.append(li);
     }
   }
@@ -653,6 +656,18 @@
       flash(`Pedido #${id} recebido: entrou no estoque.`);
     } catch (e) {
       flash(`Não deu para registrar o pedido #${id}: ${e.message}`);
+    }
+    pollApprovals();
+  }
+  async function cancelOrder(id, button) {
+    const who = $("decider").value.trim();
+    if (!who) { flash("Escreva quem decide antes de cancelar."); return; }
+    button.disabled = true;
+    try {
+      await api(`/purchase-orders/${id}/cancel`, { method: "POST", body: JSON.stringify({ cancelled_by: who }) });
+      flash(`Pedido #${id} cancelado: o insumo volta a aparecer como falta.`);
+    } catch (e) {
+      flash(`Não deu para cancelar o pedido #${id}: ${e.message}`);
     }
     pollApprovals();
   }
