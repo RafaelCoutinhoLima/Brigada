@@ -31,7 +31,7 @@ def pending_for(db: Conn, run_id: str) -> list[dict[str, Any]]:
 async def test_nul_byte_is_rejected_and_still_audited(
     server: BrigadaMCPServer, db: Conn, run_id: str, args: dict[str, Any]
 ) -> None:
-    with pytest.raises(ToolError, match="NUL characters are not allowed"):
+    with pytest.raises(ToolError, match="NUL characters"):
         await scoped_call(server, "pause_menu_item", {"restaurant_id": 1, **args})
     assert pending_for(db, run_id) == []  # nothing was proposed
     [row] = audit_rows(db, run_id)  # and the attempt left a trace

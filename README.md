@@ -42,9 +42,9 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 1 | Agent runtime | Tool-use loop, parallel tool calls, retries, timeouts, step limits, resumable state |
 | 2 | Orchestration | Planner-executor over a dependency graph, critic review |
 | 3 | MCP server | Read/write tool separation, human-in-the-loop, append-only audit log |
-| 4 | Hybrid RAG | Keyword + vector search, reranking, recall@k measured |
+| 4 | Review search (RAG) | Portuguese full-text + embeddings + RRF over customer reviews, measured on 30 labeled queries |
 | 5 | Model router | Trained classifier choosing cheap vs strong model, accuracy vs cost |
-| 6 | Evals & LLMOps | 62 cases with ground truth from the data generator, LLM-as-judge, versioned prompts, CI gate |
+| 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, LLM-as-judge, versioned prompts, CI gate |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
 
@@ -65,6 +65,20 @@ _Filled in as modules ship._
 
 _Answerer `brigada.orchestration:answer`, all 50 cases, commit `641eace`, 2026-10-29. Models: OpenRouter `:free` (nemotron-3-ultra for specialists and synthesis, nemotron-3.5-lightning for planner and critic). First real run: 60% on the ci subset._
 <!-- results:end -->
+
+### Review search
+
+`search_reviews` (menu specialist) finds what customers say about a topic. On 30 labeled queries over the seeded reviews (`uv run python -m evals.retrieval`, embeddings `nvidia/nemotron-3.5-embed-1b:free`; relevant set = every review with the phrase, R capped at 10):
+
+| Strategy | R-precision | hit@5 | MRR | R-precision on paraphrases |
+|---|---|---|---|---|
+| keyword (Postgres full-text, `portuguese` + unaccent) | 0.55 | 0.67 | 0.67 | 0.31 |
+| vector (cosine, pgvector) | **0.81** | **0.90** | **0.91** | **0.78** |
+| hybrid (RRF, k=60) | 0.74 | 0.90 | 0.89 | 0.67 |
+
+R-precision by query kind (12 exact wordings, 14 paraphrases, 4 planted injections): keyword 0.91 / 0.31 / 0.44, vector 1.00 / 0.78 / 0.38, hybrid 0.95 / 0.67 / 0.44.
+
+Vector search wins on this corpus, so it is the tool's default. Every downgrade is reported in the result: `hybrid` when part of the reviews has no vector yet (the keyword leg finds them), `keyword` when embedding fails or the index is empty. Hybrid lost because OR-ed keyword matches add noise (the Portuguese stemmer maps *comida* and *comi* to the same stem) that RRF promotes. It only helped on the planted injection reviews. Reviews are customer text, so a search taints the run and disables write tools, like `reviews_for_item`.
 
 Inventory (stock cover, dish margins, CMV, waste, cost changes, purchase proposals that need the owner's approval): 10/11 on the 11 inventory cases on the first live run with `nemotron-3.5-super-vl:free`; the miss (loss share computed over purchases instead of the counted stock) was fixed in the prompt and passes on re-run. Not yet included in the table above.
 

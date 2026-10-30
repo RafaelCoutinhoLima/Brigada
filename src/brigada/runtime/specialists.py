@@ -43,6 +43,7 @@ MENU = Specialist(
         "top_items",
         "ratings_by_item",
         "reviews_for_item",
+        "search_reviews",
         "pause_menu_item",
         "create_promotion",
     ),

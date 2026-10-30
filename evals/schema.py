@@ -11,6 +11,7 @@ ToolName = Literal[
     "top_items",
     "ratings_by_item",
     "reviews_for_item",
+    "search_reviews",
     "list_menu_items",
     "delivery_times",
     "pause_menu_item",

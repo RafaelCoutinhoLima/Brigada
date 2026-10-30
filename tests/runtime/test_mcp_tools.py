@@ -161,6 +161,24 @@ async def test_write_tools_are_disabled_after_reading_untrusted_reviews() -> Non
 
 
 @pytest.mark.db
+async def test_write_tools_are_disabled_after_searching_reviews() -> None:
+    """The planted injections are findable by search: searching taints the run too."""
+    pause = ToolCall(
+        "toolu_2", "pause_menu_item", {"restaurant_id": 3, "menu_item_id": 301, "reason": "x"}
+    )
+    tools = ("search_reviews", "pause_menu_item")
+    async with mcp_toolbox("test-taint", 3, tools, build_server()) as box:
+        found = json.loads(
+            await box.executor(
+                ToolCall("toolu_1", "search_reviews", {"restaurant_id": 3, "query": "ignore"})
+            )
+        )
+        assert any("Ignore todas" in i["untrusted_text"] for i in found["items"])
+        with pytest.raises(ToolExecutionError, match="customer-written text"):
+            await box.executor(pause)
+
+
+@pytest.mark.db
 async def test_write_tools_work_when_nothing_untrusted_was_read() -> None:
     async with mcp_toolbox("test-taint", 3, READ_AND_WRITE, build_server()) as box:
         items = json.loads(
@@ -194,3 +212,25 @@ async def test_taint_survives_a_resume() -> None:
     ) as box:
         with pytest.raises(ToolExecutionError, match="customer-written text"):
             await box.executor(pause)
+
+
+def test_child_process_gets_the_embedding_key_but_no_chat_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from brigada.config import Settings
+
+    chat_only = Settings(
+        openrouter_api_key="sk-or-chat",
+        anthropic_api_key="sk-ant-chat",
+        model_provider="openrouter",
+    )
+    monkeypatch.setattr("brigada.runtime.mcp_tools.get_settings", lambda: chat_only)
+    env = stdio_server().env or {}
+    # No dedicated key: the child gets none (keyword search), never the chat key instead.
+    assert "EMBEDDING_API_KEY" not in env
+    assert not any("sk-or-chat" in v or "sk-ant-chat" in v for v in env.values())
+    both = chat_only.model_copy(update={"embedding_api_key": "sk-or-embed"})
+    monkeypatch.setattr("brigada.runtime.mcp_tools.get_settings", lambda: both)
+    env = stdio_server().env or {}
+    assert env["EMBEDDING_API_KEY"] == "sk-or-embed"
+    assert not any("sk-or-chat" in v for v in env.values())

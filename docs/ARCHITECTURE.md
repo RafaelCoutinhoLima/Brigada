@@ -30,10 +30,10 @@ Messages shape (`runtime/openrouter.py`, ADR 0004), selected by `MODEL_PROVIDER`
 
 | Component | Path | Responsibility |
 |-----------|------|----------------|
-| Runtime | `src/brigada/runtime` | Tool-use loop, retries, timeouts, step limits, run persistence; specialist registry (Sales, Menu, Operations) |
+| Runtime | `src/brigada/runtime` | Tool-use loop, retries, timeouts, step limits, run persistence; specialist registry (Sales, Menu, Operations, Inventory) |
 | Orchestration | `src/brigada/orchestration` | Planner, DAG executor, synthesizer, critic, `answer()` |
 | MCP server | `src/brigada/mcp_server` | Read/write tools, human confirmation, audit log |
-| RAG | `src/brigada/rag` | Indexing, hybrid retrieval, reranking |
+| RAG | `src/brigada/rag` | Review search: Portuguese full-text, embeddings (OpenRouter), RRF fusion; index coverage reported to the caller; indexing in `rag/indexing.py` + `scripts/index_reviews.py` |
 | Router | `src/brigada/router` | Complexity classifier and model selection |
 | Observability | `src/brigada/observability` | OpenTelemetry setup, cost accounting |
 | API | `src/brigada/api` | FastAPI routes; `/console` live view of each specialist's runs |
@@ -47,7 +47,10 @@ menu_items(id, restaurant_id, name, category, price, active)
 orders(id, restaurant_id, created_at, total, channel)
 order_items(order_id, menu_item_id, qty, unit_price)
 deliveries(order_id, promised_minutes, actual_minutes)
-reviews(id, restaurant_id, menu_item_id, rating, text, created_at, embedding vector)
+reviews(id, restaurant_id, menu_item_id, rating, text, created_at, search tsvector generated)
+review_embeddings(review_id, restaurant_id, model, embedding vector)  -- (review, restaurant) FK
+purchase_orders(id, restaurant_id, ingredient_id, qty, status, source_action_id, ordered_at,
+     received_at, received_by, unit_cost, movement_id, cancelled_at, cancelled_by)
 runs(id, agent, restaurant_id, question, today, model, prompt_sha256, status,
      messages jsonb, steps, tokens_in, tokens_out, cost_usd, answer, error, started_at, finished_at,
      orchestration_id, plan_step, tainted)
