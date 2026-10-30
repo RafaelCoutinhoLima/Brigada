@@ -16,6 +16,7 @@ from mcp_types import CallToolResult, InputRequiredResult
 from brigada.mcp_server.audit import restaurant_context, run_context
 from brigada.mcp_server.db import Conn, connect
 from brigada.mcp_server.server import BrigadaMCPServer, build_server
+from tests.audit_cleanup import purge_audit
 
 END_DATE = date(2026, 10, 27)
 START_DATE = date(2026, 7, 30)  # 90-day seed period, inclusive
@@ -49,9 +50,9 @@ def run_id(db: Conn) -> Iterator[str]:
         for r in db.execute("SELECT id FROM pending_actions WHERE run_id = %s", (rid,)).fetchall()
     ]
     with db.transaction():
-        db.execute(
-            "DELETE FROM tool_audit WHERE run_id = %s OR (tool LIKE 'human.%%' "
-            "AND (args->>'action_id')::bigint = ANY(%s))",
+        purge_audit(
+            db,
+            "run_id = %s OR (tool LIKE 'human.%%' AND (args->>'action_id')::bigint = ANY(%s))",
             (rid, action_ids),
         )
         db.execute("DELETE FROM promotions WHERE source_action_id = ANY(%s)", (action_ids,))

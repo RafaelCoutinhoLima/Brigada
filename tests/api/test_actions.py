@@ -15,6 +15,7 @@ from psycopg.types.json import Jsonb
 from brigada.api.main import app
 from brigada.config import Settings, get_settings
 from brigada.mcp_server.db import Conn, connect
+from tests.audit_cleanup import purge_audit
 
 pytestmark = pytest.mark.db
 
@@ -76,11 +77,7 @@ def propose(db: Conn) -> Iterator[Any]:
         ).fetchall()
     ]
     with db.transaction():
-        db.execute(
-            "DELETE FROM tool_audit WHERE tool LIKE 'human.%%' "
-            "AND (args->>'action_id')::bigint = ANY(%s)",
-            (ids,),
-        )
+        purge_audit(db, "tool LIKE 'human.%%' AND (args->>'action_id')::bigint = ANY(%s)", (ids,))
         db.execute("DELETE FROM pending_actions WHERE id = ANY(%s)", (ids,))
         for row in snapshot:
             db.execute(
@@ -288,11 +285,7 @@ def test_missing_and_out_of_scope_answer_the_same(
     try:
         b = client.post(f"/actions/{missing}/approve", json={"decided_by": "x"})
     finally:  # the fixture only cleans up the actions it created
-        db.execute(
-            "DELETE FROM tool_audit WHERE tool = 'human.approve' "
-            "AND (args->>'action_id')::bigint = %s",
-            (missing,),
-        )
+        purge_audit(db, "tool = 'human.approve' AND (args->>'action_id')::bigint = %s", (missing,))
     assert a.status_code == b.status_code == 404
     assert a.json()["detail"].replace(str(theirs), "N") == b.json()["detail"].replace(
         str(missing), "N"
