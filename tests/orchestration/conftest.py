@@ -15,6 +15,7 @@ def _clean_audit_rows(request: pytest.FixtureRequest) -> Iterator[None]:
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         last = {t: conn.execute(f"SELECT coalesce(max(id), 0) FROM {t}").fetchone() for t in tables}
     yield
-    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn, conn.transaction():
+        conn.execute("SET LOCAL brigada.audit_maintenance = 'on'")  # tool_audit is append-only
         for t, row in last.items():
             conn.execute(f"DELETE FROM {t} WHERE id > %s", (row[0] if row else 0,))

@@ -10,6 +10,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from brigada.mcp_server.audit import RESTAURANT_ID_META_KEY, RUN_ID_META_KEY
 from brigada.mcp_server.db import Conn
 from brigada.mcp_server.server import BrigadaMCPServer, build_server
+from tests.audit_cleanup import purge_audit
 
 from .conftest import END_DATE, START_DATE, audit_rows, menu_item_id, scoped_call
 
@@ -238,7 +239,7 @@ async def test_run_id_travels_in_request_meta(db: Conn, run_id: str) -> None:
         assert not result.is_error
         assert [r["tool"] for r in audit_rows(db, meta_run)] == ["list_menu_items"]
     finally:
-        db.execute("DELETE FROM tool_audit WHERE run_id = %s", (meta_run,))
+        purge_audit(db, "run_id = %s", (meta_run,))
 
 
 async def test_protocol_error_result_for_bad_restaurant(db: Conn, run_id: str) -> None:

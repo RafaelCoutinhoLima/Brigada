@@ -41,7 +41,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 |---|--------|----------------|
 | 1 | Agent runtime | Tool-use loop, parallel tool calls, retries, timeouts, step limits, resumable state |
 | 2 | Orchestration | Planner-executor over a dependency graph, critic review |
-| 3 | MCP server | Read/write tool separation, human-in-the-loop, audit log |
+| 3 | MCP server | Read/write tool separation, human-in-the-loop, append-only audit log |
 | 4 | Hybrid RAG | Keyword + vector search, reranking, recall@k measured |
 | 5 | Model router | Trained classifier choosing cheap vs strong model, accuracy vs cost |
 | 6 | Evals & LLMOps | 62 cases with ground truth from the data generator, LLM-as-judge, versioned prompts, CI gate |

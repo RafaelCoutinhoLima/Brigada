@@ -4,6 +4,8 @@ from collections.abc import Iterator
 import psycopg
 import pytest
 
+from tests.audit_cleanup import purge_audit
+
 
 @pytest.fixture(autouse=True)
 def _clean_test_audit_rows(request: pytest.FixtureRequest) -> Iterator[None]:
@@ -12,5 +14,5 @@ def _clean_test_audit_rows(request: pytest.FixtureRequest) -> Iterator[None]:
     if request.node.get_closest_marker("db") is None or "DATABASE_URL" not in os.environ:
         return
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
-        conn.execute("DELETE FROM tool_audit WHERE run_id LIKE 'test-%%'")
+        purge_audit(conn, "run_id LIKE 'test-%%'")
         conn.execute("DELETE FROM pending_actions WHERE run_id LIKE 'test-%%'")

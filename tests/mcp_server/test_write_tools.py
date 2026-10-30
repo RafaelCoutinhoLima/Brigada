@@ -9,6 +9,7 @@ from brigada.mcp_server import actions
 from brigada.mcp_server.db import Conn
 from brigada.mcp_server.errors import InvalidStateError, NotFoundError
 from brigada.mcp_server.server import BrigadaMCPServer
+from tests.audit_cleanup import purge_audit
 
 from .conftest import audit_rows, menu_item_id, scoped_call
 
@@ -201,11 +202,7 @@ def test_approve_unknown_action(db: Conn) -> None:
         with pytest.raises(NotFoundError):
             actions.approve(missing, approved_by="gerente")
     finally:
-        db.execute(
-            "DELETE FROM tool_audit WHERE tool = 'human.approve' "
-            "AND (args->>'action_id')::bigint = %s",
-            (missing,),
-        )
+        purge_audit(db, "tool = 'human.approve' AND (args->>'action_id')::bigint = %s", (missing,))
 
 
 def test_approver_name_required() -> None:

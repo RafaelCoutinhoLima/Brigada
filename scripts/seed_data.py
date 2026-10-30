@@ -767,6 +767,8 @@ def load(dataset: Dataset, database_url: str, reset: bool) -> dict[str, int]:
     with psycopg.connect(database_url) as conn:
         with conn.transaction(), conn.cursor() as cur:
             if reset:
+                # tool_audit is append-only; a full reset is the one sanctioned way to clear it.
+                cur.execute("SET LOCAL brigada.audit_maintenance = 'on'")
                 cur.execute(
                     sql.SQL("TRUNCATE {} RESTART IDENTITY CASCADE").format(
                         sql.SQL(", ").join(sql.Identifier(t) for t in TABLES_IN_LOAD_ORDER)
