@@ -15,6 +15,7 @@ import argparse
 import json
 import sys
 from collections.abc import Callable, Sequence
+from decimal import Decimal
 from typing import Any
 
 from pydantic import ValidationError
@@ -28,9 +29,17 @@ from brigada.mcp_server.models import (
     PauseMenuItemInput,
     PendingAction,
     ProposePurchaseInput,
+    PurchaseOrder,
 )
 from brigada.mcp_server.queries import get_menu_item
 
+_PO_SELECT = (
+    "SELECT po.id AS purchase_order_id, po.restaurant_id, po.ingredient_id, i.name AS ingredient, "
+    "i.unit, po.qty, po.status, po.source_action_id, po.ordered_at, po.received_at, "
+    "po.received_by, po.unit_cost, po.ordered_at + make_interval(days => i.lead_time_days "
+    "+ i.safety_days) < now() AS overdue FROM purchase_orders po JOIN ingredients i "
+    "ON i.restaurant_id = po.restaurant_id AND i.id = po.ingredient_id"
+)
 _SELECT = (
     "SELECT id, restaurant_id, kind, payload, reason, status, run_id, created_at, "
     "decided_by, decided_at, decision_note FROM pending_actions"
@@ -88,8 +97,18 @@ def _execute(conn: Conn, action: PendingAction) -> dict[str, Any]:
 
         purchase = ProposePurchaseInput.model_validate(base)
         ing = get_ingredient(conn, purchase.restaurant_id, purchase.ingredient_id)  # tenant guard
-        # Approval authorizes the order; stock only changes when the goods are received.
-        return {"purchase_approved": {"ingredient": ing["name"], "qty": purchase.qty}}
+        # Approval places the order; stock only changes when the goods are received.
+        row = conn.execute(
+            "INSERT INTO purchase_orders (restaurant_id, ingredient_id, qty, source_action_id) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (purchase.restaurant_id, purchase.ingredient_id, purchase.qty, action.action_id),
+        ).fetchone()
+        assert row is not None
+        return {
+            "purchase_order_id": int(row["id"]),
+            "ingredient": ing["name"],
+            "qty": purchase.qty,
+        }
     if action.kind != "create_promotion":
         raise InvalidStateError(f"unknown action kind {action.kind!r}")
     promo = CreatePromotionInput.model_validate(base)
@@ -224,6 +243,137 @@ def list_actions(
             {"s": status, "r": sorted(restaurant_ids) if restaurant_ids is not None else None},
         ).fetchall()
     return [_to_model(r) for r in rows]
+
+
+def list_purchase_orders(
+    status: str | None = "ordered", *, restaurant_ids: frozenset[int] | None = None
+) -> list[PurchaseOrder]:
+    """Purchase orders, oldest first. ``status=None`` lists all."""
+    with connect() as conn:
+        rows = conn.execute(
+            f"{_PO_SELECT} WHERE (%(s)s::text IS NULL OR po.status = %(s)s::text) "
+            "AND (%(r)s::bigint[] IS NULL OR po.restaurant_id = ANY(%(r)s::bigint[])) "
+            "ORDER BY po.id",
+            {"s": status, "r": sorted(restaurant_ids) if restaurant_ids is not None else None},
+        ).fetchall()
+    return [PurchaseOrder.model_validate(r) for r in rows]
+
+
+def _decide_order(
+    tool: str,
+    order_id: int,
+    actor: str,
+    extra: dict[str, Any],
+    apply: Callable[[Conn, dict[str, Any]], None],
+    scope: frozenset[int] | None,
+    principal: str | None,
+) -> PurchaseOrder:
+    """Lock an open order inside the caller's scope, apply the change, audit, all at once.
+
+    Same guarantees as ``approve``: out of scope looks missing (and is audited under the
+    order's restaurant), a decided order is a conflict, failures are audited and re-raised.
+    """
+    actor = _clean_actor(actor)
+    args = {"purchase_order_id": order_id, **extra, "principal": principal}
+    restaurant_id: int | None = None
+    try:
+        with connect() as conn, conn.transaction():
+            # The scope is in the WHERE, so another restaurant's row is never even locked.
+            row = conn.execute(
+                "SELECT * FROM purchase_orders WHERE id = %(id)s "
+                "AND (%(r)s::bigint[] IS NULL OR restaurant_id = ANY(%(r)s::bigint[])) "
+                "FOR UPDATE",
+                {"id": order_id, "r": sorted(scope) if scope is not None else None},
+            ).fetchone()
+            if row is None:
+                owner = conn.execute(
+                    "SELECT restaurant_id FROM purchase_orders WHERE id = %s", (order_id,)
+                ).fetchone()
+                err = NotFoundError(f"purchase order {order_id} does not exist")
+                err.restaurant_id = owner["restaurant_id"] if owner else None  # type: ignore[attr-defined]
+                raise err
+            restaurant_id = row["restaurant_id"]
+            if row["status"] != "ordered":
+                raise InvalidStateError(f"purchase order {order_id} is already {row['status']}")
+            apply(conn, row)
+            done = conn.execute(f"{_PO_SELECT} WHERE po.id = %s", (order_id,)).fetchone()
+            assert done is not None
+            order = PurchaseOrder.model_validate(done)
+            audit.record(
+                conn,
+                tool=tool,
+                args=args,
+                result=order.model_dump(mode="json"),
+                approved_by=actor,
+                restaurant_id=restaurant_id,
+            )
+            return order
+    except Exception as exc:
+        audit.record_standalone(
+            tool=tool,
+            args=args,
+            error=f"{type(exc).__name__}: {exc}",
+            approved_by=actor,
+            restaurant_id=getattr(exc, "restaurant_id", None) or restaurant_id,
+        )
+        raise
+
+
+def receive_purchase(
+    order_id: int,
+    received_by: str,
+    unit_cost: Decimal,
+    *,
+    restaurant_ids: frozenset[int] | None = None,
+    principal: str | None = None,
+) -> PurchaseOrder:
+    """The goods arrived: the order becomes a purchase movement, at the price actually paid."""
+    if unit_cost <= 0:
+        raise ValueError("unit_cost must be positive")
+
+    def apply(conn: Conn, row: dict[str, Any]) -> None:
+        moved = conn.execute(
+            "INSERT INTO stock_movements (restaurant_id, ingredient_id, kind, qty, unit_cost, at) "
+            "VALUES (%s, %s, 'purchase', %s, %s, now()) RETURNING id",
+            (row["restaurant_id"], row["ingredient_id"], row["qty"], unit_cost),
+        ).fetchone()
+        assert moved is not None
+        conn.execute(
+            "UPDATE purchase_orders SET status = 'received', received_at = now(), "
+            "received_by = %s, unit_cost = %s, movement_id = %s WHERE id = %s",
+            (received_by.strip(), unit_cost, moved["id"], row["id"]),
+        )
+
+    return _decide_order(
+        "human.receive_purchase",
+        order_id,
+        received_by,
+        {"unit_cost": str(unit_cost)},
+        apply,
+        restaurant_ids,
+        principal,
+    )
+
+
+def cancel_purchase(
+    order_id: int,
+    cancelled_by: str,
+    *,
+    restaurant_ids: frozenset[int] | None = None,
+    principal: str | None = None,
+) -> PurchaseOrder:
+    """The supplier will not deliver: the order stops counting as stock on the way."""
+
+    def apply(conn: Conn, row: dict[str, Any]) -> None:
+        conn.execute(
+            "UPDATE purchase_orders SET status = 'cancelled', cancelled_at = now(), "
+            "cancelled_by = %s WHERE id = %s",
+            (cancelled_by.strip(), row["id"]),
+        )
+
+    return _decide_order(
+        "human.cancel_purchase", order_id, cancelled_by, {}, apply, restaurant_ids, principal
+    )
 
 
 # --------------------------------------------------------------------------------------

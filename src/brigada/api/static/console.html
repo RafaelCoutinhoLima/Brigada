@@ -197,6 +197,8 @@
   .approvals .why { grid-column: 1; font-size: 13px; color: var(--ink-soft); }
   .approvals .acts { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 8px; }
   .approvals .btn.no { background: transparent; color: var(--pepper); border-color: var(--pepper); }
+  .approvals #orders-title { margin-top: 14px; color: var(--basil); }
+  .approvals .price { width: 9ch; }
 
   /* ---- composer ---- */
   form.order { display: grid; grid-template-columns: 1fr auto auto; gap: 10px 14px; align-items: center; background: var(--paper); border: 1px solid var(--ink); border-radius: 12px; padding: 10px 12px; }
@@ -288,6 +290,8 @@
     <h2 id="approvals-title">Aguardando sua decisão</h2>
     <p class="hint">A brigada só propõe: nada abaixo foi aplicado. <label class="field" style="display:inline-flex">Quem decide <input id="decider" type="text" maxlength="100" size="12" value="dono"></label></p>
     <ol id="approvals-list"></ol>
+    <h2 id="orders-title" hidden>A caminho</h2>
+    <ol id="orders-list"></ol>
   </section>
 
   <form class="order" id="order" autocomplete="off">
@@ -622,10 +626,57 @@
     if (a.kind === "propose_purchase") return `Comprar ${Number(p.qty).toLocaleString("pt-BR")} ${a.unit || ""} de ${what}`;
     return a.kind;
   }
+  function renderOrders(list) {
+    const ol = $("orders-list");
+    ol.replaceChildren();
+    $("orders-title").hidden = list.length === 0;
+    for (const o of list) {
+      const li = el("li");
+      li.append(el("span", "what", `${Number(o.qty).toLocaleString("pt-BR")} ${o.unit} de ${o.ingredient}`));
+      const acts = el("span", "acts");
+      const price = document.createElement("input");
+      price.type = "number"; price.min = "0.01"; price.step = "0.01"; price.placeholder = "R$ / " + o.unit;
+      price.className = "field price"; price.setAttribute("aria-label", `Preço pago por ${o.unit} de ${o.ingredient}`);
+      const b = el("button", "btn", "Recebido"); b.type = "button";
+      b.onclick = () => receive(o.purchase_order_id, price.value, b);
+      const c = el("button", "btn no", "Cancelar"); c.type = "button";
+      c.onclick = () => cancelOrder(o.purchase_order_id, c);
+      acts.append(price, b, c);
+      const late = o.overdue ? " · ATRASADO: não conta mais como a caminho" : "";
+      li.append(acts, el("span", "why", `pedido aprovado em ${new Date(o.ordered_at).toLocaleString("pt-BR")}${late}`));
+      ol.append(li);
+    }
+  }
+  async function receive(id, price, button) {
+    const who = $("decider").value.trim();
+    if (!who || !(Number(price) > 0)) { flash("Informe quem recebeu e o preço pago antes de confirmar."); return; }
+    button.disabled = true;
+    try {
+      await api(`/purchase-orders/${id}/receive`, { method: "POST", body: JSON.stringify({ received_by: who, unit_cost: Number(price).toFixed(2) }) });
+      flash(`Pedido #${id} recebido: entrou no estoque.`);
+    } catch (e) {
+      flash(`Não deu para registrar o pedido #${id}: ${e.message}`);
+    }
+    pollApprovals();
+  }
+  async function cancelOrder(id, button) {
+    const who = $("decider").value.trim();
+    if (!who) { flash("Escreva quem decide antes de cancelar."); return; }
+    button.disabled = true;
+    try {
+      await api(`/purchase-orders/${id}/cancel`, { method: "POST", body: JSON.stringify({ cancelled_by: who }) });
+      flash(`Pedido #${id} cancelado: o insumo volta a aparecer como falta.`);
+    } catch (e) {
+      flash(`Não deu para cancelar o pedido #${id}: ${e.message}`);
+    }
+    pollApprovals();
+  }
+  let pendingCount = 0, ordersCount = 0;
   function renderApprovals(list) {
     const box = $("approvals"), ol = $("approvals-list");
     ol.replaceChildren();
-    box.hidden = list.length === 0;
+    pendingCount = list.length;
+    box.hidden = pendingCount + ordersCount === 0;
     for (const a of list) {
       const li = el("li");
       li.append(el("span", "what", describeAction(a)));
@@ -641,7 +692,15 @@
     }
   }
   async function pollApprovals() {
-    try { renderApprovals(await api(`/actions?restaurant_id=${restaurant()}`)); } catch { /* the runs poll reports the link */ }
+    try {
+      const [pending, orders] = await Promise.all([
+        api(`/actions?restaurant_id=${restaurant()}`),
+        api(`/purchase-orders?restaurant_id=${restaurant()}`),
+      ]);
+      ordersCount = orders.length;
+      renderOrders(orders);
+      renderApprovals(pending);
+    } catch { /* the runs poll reports the link */ }
   }
   async function decide(id, verb, button) {
     const who = $("decider").value.trim();
@@ -669,7 +728,7 @@
   }
   function stop() { clearInterval(timer); timer = null; }
   function resetAll() {
-    renderApprovals([]);
+    ordersCount = 0; renderOrders([]); renderApprovals([]);
     for (const s of STATIONS) resetStation(s.name);
     for (const k of Object.keys(CREW)) setMember(k, null, "esperando pedido");
   }

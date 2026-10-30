@@ -111,6 +111,17 @@ def stock_levels(conn: Conn, inp: StockLevelsInput) -> StockLevelsResult:
     rows = conn.execute(
         "SELECT i.id, i.name, i.unit, i.lead_time_days, i.safety_days, "
         "       coalesce(sum(m.qty), 0) AS on_hand, "
+        # An order late past lead time + safety days stops counting: a delivery that never
+        # comes must not hide the shortage forever.
+        "       (SELECT coalesce(sum(po.qty) FILTER (WHERE NOT po.late), 0) FROM ("
+        "          SELECT qty, ordered_at + make_interval(days => i.lead_time_days "
+        "                 + i.safety_days) < now() AS late FROM purchase_orders "
+        "           WHERE restaurant_id = i.restaurant_id AND ingredient_id = i.id "
+        "             AND status = 'ordered') po) AS on_order, "
+        "       (SELECT coalesce(sum(po.qty), 0) FROM purchase_orders po "
+        "         WHERE po.restaurant_id = i.restaurant_id AND po.ingredient_id = i.id "
+        "           AND po.status = 'ordered' AND po.ordered_at + make_interval(days => "
+        "               i.lead_time_days + i.safety_days) < now()) AS overdue_on_order, "
         "       -coalesce(sum(m.qty) FILTER (WHERE m.kind = 'sale' AND m.at >= %(lo)s "
         "                                      AND m.at < %(hi)s), 0) / %(days)s AS daily "
         "FROM ingredients i LEFT JOIN stock_movements m "
@@ -120,7 +131,7 @@ def stock_levels(conn: Conn, inp: StockLevelsInput) -> StockLevelsResult:
     ).fetchall()
     items = []
     for r in rows:
-        daily, on_hand = float(r["daily"]), float(r["on_hand"])
+        daily, on_hand, on_order = float(r["daily"]), float(r["on_hand"]), float(r["on_order"])
         cover = on_hand / daily if daily > 0 else None
         reorder = daily * (r["lead_time_days"] + r["safety_days"])
         level = StockLevel(
@@ -133,7 +144,11 @@ def stock_levels(conn: Conn, inp: StockLevelsInput) -> StockLevelsResult:
             lead_time_days=r["lead_time_days"],
             safety_days=r["safety_days"],
             reorder_point=round(reorder, 3),
-            below_reorder_point=daily > 0 and on_hand < reorder,
+            on_order=round(on_order, 3),
+            overdue_on_order=round(float(r["overdue_on_order"]), 3),
+            # An open order already covers the gap: counting it stops the same shortage from
+            # being proposed again. Running out before delivery still looks at on_hand only.
+            below_reorder_point=daily > 0 and on_hand + on_order < reorder,
             runs_out_before_delivery=cover is not None and cover < r["lead_time_days"],
         )
         if level.below_reorder_point or not inp.only_below_reorder_point:

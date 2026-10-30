@@ -98,6 +98,9 @@ uv run uvicorn brigada.api.main:app   # then open http://localhost:8000/console 
 curl -H "X-API-Key: $KEY" "localhost:8000/actions?restaurant_id=1"
 curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
      -d '{"decided_by": "owner"}' localhost:8000/actions/<id>/approve   # or /reject
+# an approved purchase becomes an order ("A caminho" in the console); receiving it adds the stock
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"received_by": "owner", "unit_cost": "41.90"}' localhost:8000/purchase-orders/<id>/receive
 ```
 
 ## Data

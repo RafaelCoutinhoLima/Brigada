@@ -56,6 +56,20 @@ def run_id(db: Conn) -> Iterator[str]:
             (rid, action_ids),
         )
         db.execute("DELETE FROM promotions WHERE source_action_id = ANY(%s)", (action_ids,))
+        orders = db.execute(
+            "DELETE FROM purchase_orders WHERE source_action_id = ANY(%s) "
+            "RETURNING id, movement_id",
+            (action_ids,),
+        ).fetchall()
+        purge_audit(
+            db,
+            "tool = 'human.receive_purchase' AND (args->>'purchase_order_id')::bigint = ANY(%s)",
+            ([o["id"] for o in orders],),
+        )
+        db.execute(
+            "DELETE FROM stock_movements WHERE id = ANY(%s)",
+            ([o["movement_id"] for o in orders if o["movement_id"]],),
+        )
         db.execute("DELETE FROM pending_actions WHERE id = ANY(%s)", (action_ids,))
         for row in snapshot:
             db.execute(
