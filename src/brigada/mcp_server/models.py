@@ -422,8 +422,13 @@ class ConsumptionResult(_Output):
     items: list[IngredientUse]
 
 
+# The menu's categories (seeded data and the console use exactly these). A closed set: a free
+# string let a model send "None" and get an empty list it read as "no margin data" (eval inv-010).
+MenuCategory = Literal["entrada", "principal", "sobremesa", "bebida"]
+
+
 class DishMarginsInput(PeriodInput):
-    category: str | None = None
+    category: MenuCategory | None = None
     order_by: Literal["contribution", "margin_pct"] = "contribution"
 
 

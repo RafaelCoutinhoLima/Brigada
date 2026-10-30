@@ -4,7 +4,7 @@
 
 Ask a question like *"Why did my sales drop yesterday?"*, *"What do customers complain about in my menu?"* or *"What will run out before the next delivery?"*. A planner agent breaks it into steps, specialist agents query real data through an MCP server, a critic agent reviews the answer, and every step is traced with tokens, latency and cost.
 
-> Status: 🚧 in active development. Runtime, MCP server, orchestration and the live console are in; RAG, router and the injection test suite are next.
+> Status: 🚧 in active development. Runtime, MCP server, orchestration, inventory, review search, the owner's approval flow and the live console are in; the model router and a calibrated LLM judge are next.
 
 ## Why from scratch
 
@@ -43,8 +43,8 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 2 | Orchestration | Planner-executor over a dependency graph, critic review |
 | 3 | MCP server | Read/write tool separation, human-in-the-loop, append-only audit log |
 | 4 | Review search (RAG) | Portuguese full-text + embeddings + RRF over customer reviews, measured on 30 labeled queries |
-| 5 | Model router | Trained classifier choosing cheap vs strong model, accuracy vs cost |
-| 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, LLM-as-judge, versioned prompts, CI gate |
+| 5 | Model router (planned) | Trained classifier choosing cheap vs strong model, accuracy vs cost |
+| 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, versioned prompts, CI gate; LLM-as-judge planned |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
 
@@ -55,15 +55,15 @@ _Filled in as modules ship._
 <!-- results:start -->
 | Metric | Value |
 |--------|-------|
-| Eval accuracy | 94.0% (47/50, subset: all) |
-| Tool precision / recall | 73.7% / 93.3% |
-| Mean steps | 4.14 |
-| p50 latency | 63.8 s |
-| p95 latency | 167.9 s |
+| Eval accuracy | 90.3% (56/62, subset: all) |
+| Tool precision / recall | 74.6% / 93.0% |
+| Mean steps | 4.34 |
+| p50 latency | 37.7 s |
+| p95 latency | 93.3 s |
 | Cost per question | US$ 0.0000 |
 | Router savings vs always-strong | – |
 
-_Answerer `brigada.orchestration:answer`, all 50 cases, commit `641eace`, 2026-10-29. Models: OpenRouter `:free` (nemotron-3-ultra for specialists and synthesis, nemotron-3.5-lightning for planner and critic). First real run: 60% on the ci subset._
+_Answerer `brigada.orchestration:answer`, all 62 cases including the 11 inventory ones, commit `3d12ae8`, 2026-10-30. Models: OpenRouter `:free` (nemotron-3.5-super-vl for specialists and synthesis, nemotron-3.5-lightning for planner and critic). Earlier runs: 94% on the 50 cases without inventory; 60% on the first real run. One of the 6 misses (inv-010: the model sent `category="None"` and read the empty list as "no margins") is fixed since; `inject-010` (an injection found by search) was added after this run._
 <!-- results:end -->
 
 ### Review search
@@ -80,7 +80,6 @@ R-precision by query kind (12 exact wordings, 14 paraphrases, 4 planted injectio
 
 Vector search wins on this corpus, so it is the tool's default. Every downgrade is reported in the result: `hybrid` when part of the reviews has no vector yet (the keyword leg finds them), `keyword` when embedding fails or the index is empty. Hybrid lost because OR-ed keyword matches add noise (the Portuguese stemmer maps *comida* and *comi* to the same stem) that RRF promotes. It only helped on the planted injection reviews. Reviews are customer text, so a search taints the run and disables write tools, like `reviews_for_item`.
 
-Inventory (stock cover, dish margins, CMV, waste, cost changes, purchase proposals that need the owner's approval): 10/11 on the 11 inventory cases on the first live run with `nemotron-3.5-super-vl:free`; the miss (loss share computed over purchases instead of the counted stock) was fixed in the prompt and passes on re-run. Not yet included in the table above.
 
 ## Stack
 
