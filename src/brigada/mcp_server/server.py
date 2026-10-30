@@ -50,6 +50,7 @@ from brigada.mcp_server.models import (
     IngredientId,
     ListMenuItemsInput,
     ListMenuItemsResult,
+    MenuCategory,
     MenuItemId,
     MinReviews,
     PauseMenuItemInput,
@@ -540,7 +541,7 @@ def _register_inventory(server: BrigadaMCPServer) -> None:
         restaurant_id: RestaurantId,
         start_date: date,
         end_date: date,
-        category: str | None = None,
+        category: MenuCategory | None = None,
         order_by: Literal["contribution", "margin_pct"] = "contribution",
     ) -> DishMarginsResult:
         """Per dish: price, recipe cost at the period's purchase costs, margin (R$ and %), units

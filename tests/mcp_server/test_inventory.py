@@ -200,3 +200,12 @@ async def test_stock_levels_only_lists_the_restaurants_own_ingredients(
         out = await call(server, "stock_levels", restaurant_id=rid)
         own = {i.id for i in world()[1].ingredients if i.restaurant_id == rid}
         assert {i["ingredient_id"] for i in out["items"]} == own
+
+
+@pytest.mark.parametrize("category", ["None", "pratos", "Principal"])
+async def test_an_unknown_category_is_an_error_not_an_empty_list(
+    server: BrigadaMCPServer, category: str
+) -> None:
+    """Eval inv-010: a model sent category="None" and read the empty result as "no margins"."""
+    with pytest.raises(ToolError, match="category"):
+        await call(server, "dish_margins", restaurant_id=3, category=category, **PERIOD)
