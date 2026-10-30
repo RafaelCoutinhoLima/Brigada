@@ -1,5 +1,6 @@
 """Approval routes: the owner decides on what the agents proposed, inside the key's scope."""
 
+import hashlib
 import os
 import uuid
 from collections.abc import Iterator
@@ -97,8 +98,9 @@ def test_list_shows_only_the_keys_restaurants(client: TestClient, propose: Any) 
     theirs, _ = propose(3)
     ids = [a["action_id"] for a in client.get("/actions").json()]
     assert mine in ids and theirs not in ids
-    ids = [a["action_id"] for a in client.get("/actions", params={"restaurant_id": 1}).json()]
-    assert mine in ids
+    listed = client.get("/actions", params={"restaurant_id": 1}).json()
+    assert mine in [a["action_id"] for a in listed]
+    assert all(a["subject"] for a in listed), "the owner reads names, not ids"
 
 
 def test_list_rejects_a_restaurant_outside_the_scope(client: TestClient) -> None:
@@ -120,11 +122,14 @@ def test_approve_applies_the_change_and_records_who(
     assert (r.json()["status"], r.json()["decided_by"]) == ("executed", "Rafael")
     assert not is_active(db, item)
     audit = db.execute(
-        "SELECT approved_by, error FROM tool_audit WHERE tool = 'human.approve' "
+        "SELECT approved_by, error, args->>'principal' AS principal FROM tool_audit "
+        "WHERE tool = 'human.approve' "
         "AND (args->>'action_id')::bigint = %s",
         (action_id,),
     ).fetchall()
-    assert audit == [{"approved_by": "Rafael", "error": None}]
+    key_id = "key:" + hashlib.sha256(b"test-key").hexdigest()[:8]
+    # The typed name is self-reported; the key that authenticated is recorded next to it.
+    assert audit == [{"approved_by": "Rafael", "error": None, "principal": key_id}]
 
 
 def test_another_restaurants_action_is_404_and_untouched(
@@ -167,6 +172,8 @@ def test_a_tampered_action_for_another_tenant_is_not_applied(
     ).fetchone()
     assert other is not None
     action_id, item = propose(1, int(other["id"]))  # R1 action pointing at R3's item
+    listed = {a["action_id"]: a for a in client.get("/actions").json()}
+    assert listed[action_id]["subject"] is None, "R3's dish name must not show under R1"
     r = client.post(f"/actions/{action_id}/approve", json={"decided_by": "dono"})
     assert r.status_code == 404
     assert status_of(db, action_id) == "pending" and is_active(db, item)

@@ -106,9 +106,12 @@ def _decide(
     apply: Callable[[Conn, PendingAction], dict[str, Any] | None],
     new_status: ActionStatus,
     scope: frozenset[int] | None,
+    principal: str | None,
 ) -> PendingAction:
     actor = _clean_actor(actor)
-    args = {"action_id": action_id, "note": note}
+    # ``actor`` is the name the person typed; ``principal`` is who authenticated (the API key
+    # id), so the audit does not rest on a self-reported name alone.
+    args = {"action_id": action_id, "note": note, "principal": principal}
     try:
         with connect() as conn, conn.transaction():
             action = _lock_pending(conn, action_id, scope)
@@ -143,14 +146,23 @@ def approve(
     note: str | None = None,
     *,
     restaurant_ids: frozenset[int] | None = None,
+    principal: str | None = None,
 ) -> PendingAction:
     """Execute a pending action on behalf of a human. Raises if it is not pending.
 
     ``restaurant_ids`` limits which restaurants' actions the caller may decide (the HTTP API
     passes the API key's scope); ``None`` is the trusted CLI, which sees everything.
+    ``principal`` is recorded in the audit next to the name (the HTTP API passes the key id).
     """
     return _decide(
-        "human.approve", action_id, approved_by, note, _execute, "executed", restaurant_ids
+        "human.approve",
+        action_id,
+        approved_by,
+        note,
+        _execute,
+        "executed",
+        restaurant_ids,
+        principal,
     )
 
 
@@ -160,6 +172,7 @@ def reject(
     note: str | None = None,
     *,
     restaurant_ids: frozenset[int] | None = None,
+    principal: str | None = None,
 ) -> PendingAction:
     """Reject a pending action without applying it. Raises if it is not pending."""
     return _decide(
@@ -170,6 +183,7 @@ def reject(
         lambda _c, _a: None,
         "rejected",
         restaurant_ids,
+        principal,
     )
 
 

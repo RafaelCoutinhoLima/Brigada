@@ -1,5 +1,6 @@
 """API key authentication shared by every route that touches restaurant data."""
 
+import hashlib
 import hmac
 import logging
 from typing import Annotated
@@ -37,3 +38,14 @@ def require_restaurant(restaurant_id: int, allowed: frozenset[int]) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="API key not allowed for this restaurant"
         )
+
+
+def get_key_id(
+    _allowed: Annotated[frozenset[int], Depends(get_allowed_restaurants)],
+    x_api_key: Annotated[str | None, Header()] = None,
+) -> str:
+    """A short, non-reversible id of the authenticated key, for the audit trail.
+
+    Depends on ``get_allowed_restaurants``, so it only exists for a key that was accepted.
+    """
+    return "key:" + hashlib.sha256((x_api_key or "").encode()).hexdigest()[:8]
