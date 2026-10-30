@@ -42,5 +42,10 @@ Pontos para avaliar:
 - `decided_by` é o nome que a pessoa digita. Como a chave de API não tem dono, a auditoria
   grava também `principal`, um hash curto da chave usada, para não depender só do que o
   cliente declarou. Quando existirem usuários, `decided_by` deve vir da sessão.
+- O `principal` é SHA-256 sem segredo, cortado em 32 bits: com chaves fracas, quem lê a
+  auditoria pode testar candidatas offline. Um id declarado na configuração das chaves, ou um
+  HMAC com segredo do servidor, resolve; fica para quando as chaves tiverem rótulo.
+- Uma tentativa sobre ação de outro restaurante fica auditada sob o restaurante dono da ação,
+  para que ele veja a sondagem.
 - Uma ação fora do escopo responde 404, igual a uma inexistente, para impedir a enumeração de
   ids.

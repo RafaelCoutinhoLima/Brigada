@@ -279,11 +279,20 @@ def test_a_probe_is_audited_under_the_probed_restaurant(
     assert "OutOfScopeError" in row["error"]
 
 
-def test_missing_and_out_of_scope_answer_the_same(client: TestClient, propose: Any) -> None:
+def test_missing_and_out_of_scope_answer_the_same(
+    client: TestClient, propose: Any, db: Conn
+) -> None:
     theirs, _ = propose(3)
     missing = 2**31 - 1
     a = client.post(f"/actions/{theirs}/approve", json={"decided_by": "x"})
-    b = client.post(f"/actions/{missing}/approve", json={"decided_by": "x"})
+    try:
+        b = client.post(f"/actions/{missing}/approve", json={"decided_by": "x"})
+    finally:  # the fixture only cleans up the actions it created
+        db.execute(
+            "DELETE FROM tool_audit WHERE tool = 'human.approve' "
+            "AND (args->>'action_id')::bigint = %s",
+            (missing,),
+        )
     assert a.status_code == b.status_code == 404
     assert a.json()["detail"].replace(str(theirs), "N") == b.json()["detail"].replace(
         str(missing), "N"
