@@ -391,6 +391,9 @@ class DishMarginsResult(_Output):
     start_date: date
     end_date: date
     items: list[DishMargin]
+    dishes_without_recipe: list[str] = Field(
+        default_factory=list, description="No recipe registered, so no cost: left out of items."
+    )
 
 
 class CmvInput(PeriodInput):
@@ -401,16 +404,24 @@ class CmvGroup(_Output):
     key: str
     revenue: float
     cost_of_goods: float
-    cmv_pct: float | None = Field(description="cost_of_goods / revenue, 0..1.")
+    cmv_pct: float | None = Field(
+        description="cost_of_goods / revenue of dishes with a recipe, 0..1."
+    )
 
 
 class CmvResult(_Output):
     restaurant_id: int
     start_date: date
     end_date: date
-    revenue: float
+    revenue: float = Field(description="All sales in the period, with or without a recipe.")
     cost_of_goods: float
-    cmv_pct: float | None
+    cmv_pct: float | None = Field(
+        description="cost_of_goods / (revenue - revenue_without_recipe), 0..1."
+    )
+    revenue_without_recipe: float = Field(
+        default=0.0, description="Sales of dishes with no recipe: no cost, outside cmv_pct."
+    )
+    dishes_without_recipe: list[str] = Field(default_factory=list)
     groups: list[CmvGroup]
 
 

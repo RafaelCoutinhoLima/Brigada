@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from brigada.mcp_server.db import Conn, local_day_bounds, local_tz
-from brigada.mcp_server.errors import NotFoundError
+from brigada.mcp_server.errors import InvalidStateError, NotFoundError
 from brigada.mcp_server.models import (
     CmvGroup,
     CmvInput,
@@ -50,15 +50,39 @@ cost AS (
       FROM ingredients i WHERE i.restaurant_id = %(rid)s
 )"""
 
+# Recipe cost per dish. ``uncosted`` names the ingredients with no purchase price yet: their
+# lines would vanish from the SUM, so callers must refuse instead of understating the cost.
+_UNIT_COST_CTE = """
+unit_cost AS (
+    SELECT r.menu_item_id, sum(r.qty * c.avg_cost) AS cost,
+           array_agg(i.name ORDER BY i.name) FILTER (WHERE c.avg_cost IS NULL) AS uncosted
+      FROM recipes r
+      JOIN cost c ON c.ingredient_id = r.ingredient_id
+      JOIN ingredients i ON i.restaurant_id = r.restaurant_id AND i.id = r.ingredient_id
+     WHERE r.restaurant_id = %(rid)s GROUP BY r.menu_item_id
+)"""
+
 
 def _f(value: Any, digits: int = 3) -> float:
     return round(float(value or 0), digits)
 
 
+def _refuse_uncosted(rows: list[dict[str, Any]], end: date) -> None:
+    missing = sorted({name for r in rows for name in r["uncosted"] or []})
+    if missing:
+        dishes = sorted({r["name"] for r in rows if r["uncosted"]})
+        raise InvalidStateError(
+            f"no purchase cost up to {end} for {', '.join(missing)} "
+            f"(used in {', '.join(dishes)}): dish cost cannot be computed for this period"
+        )
+
+
 def _as_of(conn: Conn, restaurant_id: int) -> date:
+    """Last day with sales; a restaurant with stock but no sales yet uses its last movement."""
     row = conn.execute(
-        "SELECT max((at AT TIME ZONE %s)::date) AS d FROM stock_movements "
-        "WHERE restaurant_id = %s AND kind = 'sale'",
+        "SELECT coalesce(max(d) FILTER (WHERE kind = 'sale'), max(d)) AS d FROM ("
+        "  SELECT (at AT TIME ZONE %s)::date AS d, kind FROM stock_movements "
+        "  WHERE restaurant_id = %s) m",
         (local_tz().key, restaurant_id),
     ).fetchone()
     if row is None or row["d"] is None:
@@ -159,22 +183,21 @@ def dish_margins(conn: Conn, inp: DishMarginsInput) -> DishMarginsResult:
     ensure_restaurant(conn, inp.restaurant_id)
     lo, hi = local_day_bounds(inp.start_date, inp.end_date)
     rows = conn.execute(
-        f"WITH {_COST_CTE}, "
-        "unit_cost AS (SELECT r.menu_item_id, sum(r.qty * c.avg_cost) AS cost FROM recipes r "
-        "  JOIN cost c ON c.ingredient_id = r.ingredient_id "
-        "  WHERE r.restaurant_id = %(rid)s GROUP BY r.menu_item_id), "
+        f"WITH {_COST_CTE}, {_UNIT_COST_CTE}, "
         "sold AS (SELECT oi.menu_item_id, sum(oi.qty) AS qty FROM order_items oi "
         "  JOIN orders o ON o.id = oi.order_id "
         "  WHERE o.restaurant_id = %(rid)s AND o.created_at >= %(lo)s AND o.created_at < %(hi)s "
         "  GROUP BY oi.menu_item_id) "
-        "SELECT m.id, m.name, m.category, m.price, u.cost, coalesce(s.qty, 0) AS qty "
-        "FROM menu_items m JOIN unit_cost u ON u.menu_item_id = m.id "
+        "SELECT m.id, m.name, m.category, m.price, u.cost, u.uncosted, "
+        "       u.menu_item_id IS NOT NULL AS has_recipe, coalesce(s.qty, 0) AS qty "
+        "FROM menu_items m LEFT JOIN unit_cost u ON u.menu_item_id = m.id "
         "LEFT JOIN sold s ON s.menu_item_id = m.id "
         "WHERE m.restaurant_id = %(rid)s AND (%(cat)s::text IS NULL OR m.category = %(cat)s::text)",
         {"rid": inp.restaurant_id, "lo": lo, "hi": hi, "cat": inp.category},
     ).fetchall()
+    _refuse_uncosted(rows, inp.end_date)
     items = []
-    for r in rows:
+    for r in (r for r in rows if r["has_recipe"]):
         price, cost = float(r["price"]), float(r["cost"])
         margin = price - cost
         items.append(
@@ -199,6 +222,7 @@ def dish_margins(conn: Conn, inp: DishMarginsInput) -> DishMarginsResult:
         start_date=inp.start_date,
         end_date=inp.end_date,
         items=items,
+        dishes_without_recipe=sorted(r["name"] for r in rows if not r["has_recipe"]),
     )
 
 
@@ -206,30 +230,34 @@ def cmv(conn: Conn, inp: CmvInput) -> CmvResult:
     ensure_restaurant(conn, inp.restaurant_id)
     lo, hi = local_day_bounds(inp.start_date, inp.end_date)
     rows = conn.execute(
-        f"WITH {_COST_CTE}, "
-        "unit_cost AS (SELECT r.menu_item_id, sum(r.qty * c.avg_cost) AS cost FROM recipes r "
-        "  JOIN cost c ON c.ingredient_id = r.ingredient_id "
-        "  WHERE r.restaurant_id = %(rid)s GROUP BY r.menu_item_id) "
-        "SELECT m.category, sum(oi.qty * oi.unit_price) AS revenue, "
-        "       sum(oi.qty * u.cost) AS cogs "
+        f"WITH {_COST_CTE}, {_UNIT_COST_CTE} "
+        "SELECT m.name, m.category, sum(oi.qty * oi.unit_price) AS revenue, "
+        "       sum(oi.qty) * u.cost AS cogs, u.uncosted, u.menu_item_id IS NOT NULL AS has_recipe "
         "FROM order_items oi JOIN orders o ON o.id = oi.order_id "
         "JOIN menu_items m ON m.id = oi.menu_item_id AND m.restaurant_id = o.restaurant_id "
-        "JOIN unit_cost u ON u.menu_item_id = m.id "
+        "LEFT JOIN unit_cost u ON u.menu_item_id = m.id "
         "WHERE o.restaurant_id = %(rid)s AND o.created_at >= %(lo)s AND o.created_at < %(hi)s "
-        "GROUP BY m.category ORDER BY m.category",
+        "GROUP BY m.id, u.menu_item_id, u.cost, u.uncosted ORDER BY m.category, m.id",
         {"rid": inp.restaurant_id, "lo": lo, "hi": hi},
     ).fetchall()
-    revenue = sum(float(r["revenue"]) for r in rows)
-    cogs = sum(float(r["cogs"]) for r in rows)
+    _refuse_uncosted(rows, inp.end_date)
+    totals: dict[str, list[float]] = {}  # category -> [revenue, covered revenue, cogs]
+    for r in rows:
+        t = totals.setdefault(r["category"], [0.0, 0.0, 0.0])
+        t[0] += float(r["revenue"])
+        if r["has_recipe"]:
+            t[1] += float(r["revenue"])
+            t[2] += float(r["cogs"])
+    revenue, covered, cogs = (sum(t[i] for t in totals.values()) for i in range(3))
     groups = (
         [
             CmvGroup(
-                key=r["category"],
-                revenue=round(float(r["revenue"]), 2),
-                cost_of_goods=round(float(r["cogs"]), 2),
-                cmv_pct=round(float(r["cogs"]) / float(r["revenue"]), 4) if r["revenue"] else None,
+                key=key,
+                revenue=round(rev, 2),
+                cost_of_goods=round(cost, 2),
+                cmv_pct=round(cost / cov, 4) if cov else None,
             )
-            for r in rows
+            for key, (rev, cov, cost) in totals.items()
         ]
         if inp.group_by == "category"
         else []
@@ -240,7 +268,9 @@ def cmv(conn: Conn, inp: CmvInput) -> CmvResult:
         end_date=inp.end_date,
         revenue=round(revenue, 2),
         cost_of_goods=round(cogs, 2),
-        cmv_pct=round(cogs / revenue, 4) if revenue else None,
+        cmv_pct=round(cogs / covered, 4) if covered else None,
+        revenue_without_recipe=round(revenue - covered, 2),
+        dishes_without_recipe=sorted({r["name"] for r in rows if not r["has_recipe"]}),
         groups=groups,
     )
 
@@ -311,6 +341,11 @@ def cost_changes(conn: Conn, inp: CostChangesInput) -> CostChangesResult:
         "WHERE i.restaurant_id = %(rid)s GROUP BY i.id",
         {"rid": inp.restaurant_id, "r_lo": r_lo, "r_hi": r_hi, "p_lo": p_lo, "p_hi": p_hi},
     ).fetchall()
+    if not any(r["pc"] is not None for r in rows):
+        raise InvalidStateError(
+            f"no purchases between {previous[0]} and {previous[1]} to compare with; "
+            "use a smaller recent_days"
+        )
     items = [
         CostChange(
             ingredient_id=r["id"],
