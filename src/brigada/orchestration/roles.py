@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 
+from anthropic import transform_schema
 from pydantic import BaseModel, ValidationError
 
 from brigada.config import get_settings
@@ -157,10 +158,19 @@ def _structured[M: BaseModel](
             max_steps=3,
             max_tokens=STRUCTURED_MAX_TOKENS,
             terminal_tools=frozenset({tool}),
-            tool_choice={"type": "tool", "name": tool},
         ),
         client,
-        [{"name": tool, "description": description, "input_schema": tool_schema(schema)}],
+        [
+            {
+                "name": tool,
+                "description": description,
+                # strict: the API guarantees schema-valid input, which a forced tool_choice used
+                # to give. Constraints strict cannot express (lengths, patterns, maxItems) move
+                # into the descriptions and are still enforced by ``validate``.
+                "input_schema": transform_schema(tool_schema(schema)),
+                "strict": True,
+            }
+        ],
         validate,
     )
     return Role(agent, _sha(prefix + json.dumps(tool_schema(schema), sort_keys=True)))

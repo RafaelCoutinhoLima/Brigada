@@ -18,7 +18,7 @@ from brigada.runtime.sales import ask_sales, resume_sales
 from brigada.runtime.state import RunStore, resume_persisted, run_persisted
 from brigada.runtime.types import MaxStepsExceeded, ResponseTruncated, ToolCall
 
-from .fakes import MODEL, FakeClient, message, text, tool_use
+from .fakes import MODEL, FakeClient, message, system_text, text, tool_use
 
 pytestmark = pytest.mark.db
 
@@ -197,7 +197,7 @@ async def test_sales_run_resumes_with_original_date_and_restaurant(store: RunSto
         )
     second = FakeClient(message(text("ok")))
     await resume_sales(rid, store, client=second, server=build_server())
-    assert "hoje: 2026-10-28" in second.messages.requests[0]["system"]
+    assert "hoje: 2026-10-28" in system_text(second.messages.requests[0])
     assert rows("SELECT status FROM runs WHERE id = %s", rid)[0]["status"] == "succeeded"
 
 

@@ -20,7 +20,7 @@ from brigada.runtime.types import (
     UnexpectedStopReason,
 )
 
-from .fakes import MODEL, FakeClient, message, text, tool_use
+from .fakes import MODEL, FakeClient, message, system_text, text, tool_use
 
 TOOLS: list[Any] = [{"name": "sales_by_period", "description": "d", "input_schema": {}}]
 
@@ -57,9 +57,42 @@ async def test_direct_answer_is_one_step() -> None:
     assert result.steps == 1
     assert result.tools_called == []
     req = client.messages.requests[0]
-    assert req["model"] == MODEL and req["system"].startswith("Você")
+    assert req["model"] == MODEL and system_text(req).startswith("Você")
     assert req["tools"] == TOOLS
     assert req["messages"] == [{"role": "user", "content": "oi"}]
+
+
+async def test_requests_mark_two_cache_breakpoints() -> None:
+    client = FakeClient(message(text("Olá!")))
+    await agent(client).run("oi")
+    req = client.messages.requests[0]
+    # The stable prefix (tools + system) and, at the top level, the growing conversation.
+    assert req["system"] == [
+        {
+            "type": "text",
+            "text": "Você é o especialista de vendas.",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    assert req["cache_control"] == {"type": "ephemeral"}
+
+
+async def test_prose_instead_of_the_terminal_tool_gets_a_reminder() -> None:
+    client = FakeClient(
+        message(text("O plano é olhar as vendas.")),
+        message(tool_use("toolu_1", "sales_by_period", restaurant_id=1), stop_reason="tool_use"),
+    )
+    result = await agent(client, terminal_tools=frozenset({"sales_by_period"})).run("plano?")
+    assert result.text == '{"total_revenue": 412.3}' and result.steps == 2
+    reminder = client.messages.requests[1]["messages"][-1]
+    assert reminder["role"] == "user" and "`sales_by_period`" in reminder["content"]
+    assert "tool_choice" not in client.messages.requests[0]
+
+
+async def test_a_model_that_never_calls_the_terminal_tool_fails_closed() -> None:
+    client = FakeClient(*(message(text("texto")) for _ in range(2)))
+    with pytest.raises(MaxStepsExceeded):
+        await agent(client, terminal_tools=frozenset({"sales_by_period"}), max_steps=2).run("x")
 
 
 async def test_tool_round_trip_builds_the_right_conversation() -> None:

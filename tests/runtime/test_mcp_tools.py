@@ -12,7 +12,7 @@ from brigada.runtime.sales import SALES_TOOLS, ask_sales, sales_system_prompt
 from brigada.runtime.tools import ToolExecutionError
 from brigada.runtime.types import MaxStepsExceeded, ToolCall
 
-from .fakes import FakeClient, message, text, tool_use
+from .fakes import FakeClient, message, system_text, text, tool_use
 
 OUTAGE_DAY = "2026-10-27"
 
@@ -102,7 +102,7 @@ async def test_sales_agent_end_to_end_with_scripted_model() -> None:
     tool_result = client.messages.requests[1]["messages"][-1]["content"][0]
     assert tool_result["is_error"] is False
     assert json.loads(tool_result["content"])["total_orders"] > 0
-    assert "2026-10-28 (quarta)" in client.messages.requests[0]["system"]
+    assert "2026-10-28 (quarta)" in system_text(client.messages.requests[0])
 
 
 @pytest.mark.db
