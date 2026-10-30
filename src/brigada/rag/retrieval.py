@@ -8,7 +8,7 @@ query first (embedding is an HTTP call, search is SQL).
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from brigada.mcp_server.db import Conn
 
@@ -71,23 +71,58 @@ def rrf(rankings: Sequence[Sequence[int]], k: int = RRF_K) -> list[tuple[int, fl
     return sorted(scores.items(), key=lambda x: (-x[1], x[0]))
 
 
+@dataclass(frozen=True)
+class QueryEmbedding:
+    """A query vector and the model that produced it: they only make sense together."""
+
+    model: str
+    vector: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class Coverage:
+    """How much of a restaurant's reviews the vector leg can see for one model."""
+
+    reviews: int
+    indexed: int  # with a vector of this model AND of the query's dimension
+    wrong_dimension: int  # vectors of this model with another dimension: a config error
+
+    @property
+    def unindexed(self) -> int:
+        return self.reviews - self.indexed
+
+
+def coverage(conn: Conn, restaurant_id: int, embedding: QueryEmbedding) -> Coverage:
+    row = conn.execute(
+        "SELECT (SELECT count(*) FROM reviews WHERE restaurant_id = %(rid)s) AS reviews, "
+        "count(*) FILTER (WHERE vector_dims(e.embedding) = %(d)s) AS indexed, "
+        "count(*) FILTER (WHERE vector_dims(e.embedding) <> %(d)s) AS wrong "
+        "FROM review_embeddings e JOIN reviews r "
+        "  ON r.id = e.review_id AND r.restaurant_id = e.restaurant_id "
+        "WHERE e.restaurant_id = %(rid)s AND e.model = %(m)s",
+        {"rid": restaurant_id, "m": embedding.model, "d": len(embedding.vector)},
+    ).fetchone()
+    assert row is not None
+    return Coverage(int(row["reviews"]), int(row["indexed"]), int(row["wrong"]))
+
+
 def search(
     conn: Conn,
     restaurant_id: int,
     query: str,
     *,
     k: int,
-    mode: Mode = "hybrid",
-    model: str | None = None,
-    query_vector: Sequence[float] | None = None,
+    mode: Mode,
+    embedding: QueryEmbedding | None = None,
 ) -> list[Hit]:
-    """Top ``k`` reviews of one restaurant for ``query``."""
-    if mode != "keyword" and (model is None or query_vector is None):
-        raise ValueError(f"mode {mode!r} needs the embedding model and the query vector")
+    """Top ``k`` reviews of one restaurant for ``query``. ``keyword`` takes no embedding;
+    ``vector`` and ``hybrid`` require one (an incoherent call is a bug, not a fallback)."""
+    if (mode == "keyword") != (embedding is None):
+        raise ValueError(f"mode {mode!r} with embedding={embedding is not None} is incoherent")
     kw = keyword_ranking(conn, restaurant_id, query, CANDIDATES) if mode != "vector" else []
     vec = (
-        vector_ranking(conn, restaurant_id, model, query_vector, CANDIDATES)  # type: ignore[arg-type]
-        if mode != "keyword"
+        vector_ranking(conn, restaurant_id, embedding.model, embedding.vector, CANDIDATES)
+        if embedding is not None and mode != "keyword"
         else []
     )
     kw_pos = {d: i for i, d in enumerate(kw, start=1)}
@@ -98,31 +133,3 @@ def search(
 
 def to_pgvector(values: Sequence[float]) -> str:
     return "[" + ",".join(f"{x:.7g}" for x in values) + "]"
-
-
-def missing_reviews(
-    conn: Conn, model: str, *, restaurant_id: int | None = None
-) -> list[dict[str, Any]]:
-    """Reviews with no embedding for ``model`` yet (id, restaurant_id, text)."""
-    return conn.execute(
-        "SELECT r.id, r.restaurant_id, r.text FROM reviews r WHERE NOT EXISTS ("
-        "  SELECT 1 FROM review_embeddings e WHERE e.review_id = r.id AND e.model = %(m)s) "
-        "AND (%(rid)s::int IS NULL OR r.restaurant_id = %(rid)s::int) ORDER BY r.id",
-        {"m": model, "rid": restaurant_id},
-    ).fetchall()
-
-
-def store_embeddings(
-    conn: Conn, model: str, reviews: Sequence[dict[str, Any]], vectors: Sequence[Sequence[float]]
-) -> int:
-    """Insert one vector per review (same order as ``missing_reviews`` returned them)."""
-    with conn.cursor() as cur:
-        cur.executemany(
-            "INSERT INTO review_embeddings (review_id, restaurant_id, model, embedding) "
-            "VALUES (%s, %s, %s, %s::vector) ON CONFLICT (review_id, model) DO NOTHING",
-            [
-                (r["id"], r["restaurant_id"], model, to_pgvector(v))
-                for r, v in zip(reviews, vectors, strict=True)
-            ],
-        )
-    return len(reviews)

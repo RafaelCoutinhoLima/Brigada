@@ -249,9 +249,13 @@ class SearchReviewsResult(_Output):
     note: str = UNTRUSTED_NOTE
     restaurant_id: int
     query: str
-    mode: Literal["vector", "keyword"] = Field(
-        description="vector = semantic search. keyword = word match only, because the semantic "
-        "search was unavailable: say the results may miss reviews worded differently."
+    mode: Literal["vector", "hybrid", "keyword"] = Field(
+        description="vector = semantic search over every review. hybrid = semantic + word "
+        "match, because some reviews are not indexed yet. keyword = word match only (semantic "
+        "search unavailable): say the results may miss reviews worded differently."
+    )
+    unindexed: int = Field(
+        description="Reviews the semantic search could not see (not indexed yet)."
     )
     items: list[Review] = Field(description="Most relevant first.")
 

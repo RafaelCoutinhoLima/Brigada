@@ -31,7 +31,8 @@ from typing import Any
 
 from brigada.mcp_server.db import Conn, connect
 from brigada.rag.embeddings import Embedder, HashingEmbedder, default_embedder
-from brigada.rag.retrieval import Mode, missing_reviews, search, store_embeddings
+from brigada.rag.indexing import missing_reviews, store_embeddings
+from brigada.rag.retrieval import Mode, QueryEmbedding, search
 from scripts.seed_data import INJECTION_TEXTS
 
 R_CAP = 10
@@ -107,13 +108,20 @@ def metrics(ranked_relevance: Sequence[bool], total_relevant: int) -> dict[str, 
     }
 
 
-async def evaluate(conn: Conn, embedder: Embedder) -> dict[str, Any]:
+async def evaluate(conn: Conn, embedder: Embedder, *, index: bool = False) -> dict[str, Any]:
     texts = {
         r["id"]: (r["restaurant_id"], r["text"])
         for r in conn.execute("SELECT id, restaurant_id, text FROM reviews").fetchall()
     }
     missing = missing_reviews(conn, embedder.model)
-    if missing:  # the index must cover the corpus, or the vector leg is measured on a subset
+    if missing and not index:
+        # Measuring must not write by surprise; and on a partial index the vector leg would be
+        # measured on a subset of the corpus.
+        raise SystemExit(
+            f"{len(missing)} reviews have no {embedder.model} vector: run "
+            "scripts/index_reviews.py, or pass --index to embed them now"
+        )
+    if missing:
         vectors = await embedder.embed([r["text"] for r in missing])
         with conn.transaction():
             store_embeddings(conn, embedder.model, missing, vectors)
@@ -132,15 +140,8 @@ async def evaluate(conn: Conn, embedder: Embedder) -> dict[str, Any]:
             "relevant": total,
         }
         for mode in MODES:
-            hits = search(
-                conn,
-                q.restaurant_id,
-                q.text,
-                k=R_CAP,
-                mode=mode,
-                model=embedder.model,
-                query_vector=qv,
-            )
+            emb = None if mode == "keyword" else QueryEmbedding(embedder.model, tuple(qv))
+            hits = search(conn, q.restaurant_id, q.text, k=R_CAP, mode=mode, embedding=emb)
             assert all(texts[h.review_id][0] == q.restaurant_id for h in hits), "tenant leak"
             rel = [is_relevant(texts[h.review_id][1], q.relevant_phrases) for h in hits]
             row[mode] = metrics(rel, total)
@@ -187,11 +188,12 @@ def table(summary: dict[str, dict[str, dict[str, float]]]) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Review retrieval eval.")
     parser.add_argument("--hashing", action="store_true", help="offline embedder")
+    parser.add_argument("--index", action="store_true", help="embed unindexed reviews first")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args(argv)
     embedder: Embedder = HashingEmbedder() if args.hashing else default_embedder()
     with connect() as conn:
-        result = asyncio.run(evaluate(conn, embedder))
+        result = asyncio.run(evaluate(conn, embedder, index=args.index))
     out = (
         args.out
         or Path(__file__).parent

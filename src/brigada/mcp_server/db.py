@@ -17,9 +17,18 @@ from brigada.config import get_settings
 type Conn = psycopg.Connection[DictRow]
 
 
+STATEMENT_TIMEOUT_MS = 10_000
+
+
 def connect() -> Conn:
     """Open a new connection with dict rows. Use as a context manager (commits on exit)."""
-    return psycopg.connect(get_settings().database_url, row_factory=dict_row)
+    # A ceiling per statement: tools answer in milliseconds, and a query that grows with the data
+    # (an exact vector scan, say) must fail as an error, not hold a worker and a connection.
+    return psycopg.connect(
+        get_settings().database_url,
+        row_factory=dict_row,
+        options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
+    )
 
 
 def local_tz() -> ZoneInfo:

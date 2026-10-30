@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from brigada.mcp_server.db import connect  # noqa: E402
 from brigada.rag.embeddings import Embedder, HashingEmbedder, default_embedder  # noqa: E402
-from brigada.rag.retrieval import missing_reviews, store_embeddings  # noqa: E402
+from brigada.rag.indexing import missing_reviews, store_embeddings  # noqa: E402
 
 
 async def index(embedder: Embedder) -> int:
