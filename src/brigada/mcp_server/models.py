@@ -302,6 +302,21 @@ class PendingAction(_Output):
     decision_note: str | None
 
 
+class PurchaseOrder(_Output):
+    purchase_order_id: int
+    restaurant_id: int
+    ingredient_id: int
+    ingredient: str
+    unit: str
+    qty: float
+    status: Literal["ordered", "received", "cancelled"]
+    source_action_id: int | None
+    ordered_at: datetime
+    received_at: datetime | None
+    received_by: str | None
+    unit_cost: float | None
+
+
 # --------------------------------------------------------------------------------------
 # Inventory (stock, recipes, costs). Every number is computed in SQL from the movements.
 # --------------------------------------------------------------------------------------
@@ -326,7 +341,10 @@ class StockLevel(_Output):
     lead_time_days: int
     safety_days: int
     reorder_point: float = Field(description="avg_daily_use x (lead_time_days + safety_days).")
-    below_reorder_point: bool
+    on_order: float = Field(
+        description="Approved purchases not received yet. Already ordered: do not propose again."
+    )
+    below_reorder_point: bool = Field(description="on_hand + on_order < reorder_point.")
     runs_out_before_delivery: bool = Field(description="cover_days < lead_time_days.")
 
 

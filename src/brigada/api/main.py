@@ -22,7 +22,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from brigada import __version__
-from brigada.api import actions, console
+from brigada.api import actions, console, purchases
 from brigada.api.auth import get_allowed_restaurants, require_restaurant
 from brigada.api.schemas import Answerer, AnswerOutcome, AskRequest, AskResponse, HealthResponse
 from brigada.config import Settings, get_settings
@@ -54,6 +54,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Brigada", version=__version__, lifespan=lifespan)
 app.include_router(console.router)
 app.include_router(actions.router)
+app.include_router(purchases.router)
 
 
 @app.middleware("http")

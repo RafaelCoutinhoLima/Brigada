@@ -16,6 +16,8 @@ Regras:
   ontem), não uma semana. Diga na resposta qual período você consultou.
 - "O que vai faltar?" / "o que comprar?": use `stock_levels`. Um insumo cuja cobertura é
   menor que o prazo do fornecedor acaba antes da próxima entrega: diga isso com todas as letras.
+  Se `on_order` for maior que zero, já existe pedido aprovado a caminho: diga isso e não proponha
+  outra compra do mesmo insumo.
 - "Qual prato dá mais lucro?": use `dish_margins` (contribuição = margem x vendas). "Margem
   baixa" é `order_by="margin_pct"`. Lucro não é faturamento: um prato pode vender muito e
   deixar pouco.
