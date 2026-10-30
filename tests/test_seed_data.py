@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import uuid
 from collections import Counter, defaultdict
+from collections.abc import Iterator
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -311,13 +314,45 @@ def test_planted_facts_match_thresholds(ds: Dataset) -> None:
 # --- database -------------------------------------------------------------------------------
 
 
-@pytest.mark.db
-def test_load_into_database(ds: Dataset) -> None:
+MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migrations"
+
+
+@pytest.fixture
+def scratch_database_url() -> Iterator[str]:
+    """A fresh database on the same server, with every migration, dropped afterwards.
+
+    ``load(reset=True)`` truncates every seed table with CASCADE, which also empties runs,
+    orchestrations and pending actions. Run against DATABASE_URL, each ``pytest -m db``
+    wiped the shared database, including an eval running at the same time.
+    """
     url = os.environ.get("DATABASE_URL")
     if not url:
         pytest.skip("DATABASE_URL not set")
     import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
 
+    name = f"brigada_seedtest_{uuid.uuid4().hex[:8]}"
+    with psycopg.connect(url, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    scratch = make_conninfo(url, dbname=name)
+    try:
+        with psycopg.connect(scratch, autocommit=True) as conn:
+            for migration in sorted(MIGRATIONS.glob("*.sql")):
+                conn.execute(migration.read_text(encoding="utf-8"))  # type: ignore[arg-type]
+        yield scratch
+    finally:
+        with psycopg.connect(url, autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+            )
+
+
+@pytest.mark.db
+def test_load_into_database(ds: Dataset, scratch_database_url: str) -> None:
+    import psycopg
+
+    url = scratch_database_url
     written = load(ds, url, reset=True)
     expected = {
         "restaurants": len(ds.restaurants),
