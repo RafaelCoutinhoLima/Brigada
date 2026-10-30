@@ -212,3 +212,20 @@ async def test_taint_survives_a_resume() -> None:
     ) as box:
         with pytest.raises(ToolExecutionError, match="customer-written text"):
             await box.executor(pause)
+
+
+def test_child_process_gets_the_embedding_key_but_no_chat_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from brigada.config import Settings
+
+    settings = Settings(
+        openrouter_api_key="sk-or-canary",
+        anthropic_api_key="sk-ant-canary",
+        model_provider="openrouter",
+    )
+    monkeypatch.setattr("brigada.runtime.mcp_tools.get_settings", lambda: settings)
+    env = stdio_server().env or {}
+    assert env["EMBEDDING_API_KEY"] == "sk-or-canary"
+    assert "OPENROUTER_API_KEY" not in env and "ANTHROPIC_API_KEY" not in env
+    assert "sk-ant-canary" not in "".join(env.values())

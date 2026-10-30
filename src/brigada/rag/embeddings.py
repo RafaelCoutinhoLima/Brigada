@@ -113,5 +113,7 @@ def default_embedder() -> Embedder:
 
     s = get_settings()
     return OpenRouterEmbedder(
-        s.openrouter_api_key, s.embedding_model, base_url=s.openrouter_base_url
+        s.embedding_api_key or s.openrouter_api_key,
+        s.embedding_model,
+        base_url=s.openrouter_base_url,
     )

@@ -35,7 +35,7 @@ from evals.world import TODAY
 async def test_oracle_scores_100_percent() -> None:
     report = await evaluate("evals.oracle:answer")
     s = report.summary
-    assert s.n == 62
+    assert s.n == 63
     assert s.accuracy == 1.0, [c.id for c in report.cases if not c.passed]
     assert s.errors == 0
     assert s.tool_precision == 1.0 and s.tool_recall == 1.0

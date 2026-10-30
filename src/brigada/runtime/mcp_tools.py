@@ -55,11 +55,18 @@ class Toolbox:
 
 def stdio_server() -> StdioServerParameters:
     """Run the MCP server as a child process. Only the variables it needs are passed on:
-    the default safe set plus DATABASE_URL (never ANTHROPIC_API_KEY)."""
+    the default safe set, DATABASE_URL and the embedding key (never a chat model key)."""
     env = get_default_environment()
     env["DATABASE_URL"] = os.environ.get("DATABASE_URL", get_settings().database_url)
     env["TIMEZONE"] = get_settings().timezone  # parent and child must agree on "today"
     env["BRIGADA_NO_DOTENV"] = "1"
+    # search_reviews embeds its query: the child gets the embedding key and model only, never
+    # the chat model keys.
+    s = get_settings()
+    if key := s.embedding_api_key or s.openrouter_api_key:
+        env["EMBEDDING_API_KEY"] = key
+        env["EMBEDDING_MODEL"] = s.embedding_model
+        env["OPENROUTER_BASE_URL"] = s.openrouter_base_url
     return StdioServerParameters(command=sys.executable, args=["-m", "brigada.mcp_server"], env=env)
 
 

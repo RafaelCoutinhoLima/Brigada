@@ -24,8 +24,8 @@ def test_cases_file_in_sync_with_builder() -> None:
     )
 
 
-def test_exactly_62_cases(cases: list[Case]) -> None:
-    assert len(cases) == 62
+def test_exactly_63_cases(cases: list[Case]) -> None:
+    assert len(cases) == 63
 
 
 def test_ids_and_questions_unique(cases: list[Case]) -> None:

@@ -44,7 +44,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 3 | MCP server | Read/write tool separation, human-in-the-loop, append-only audit log |
 | 4 | Review search (RAG) | Portuguese full-text + embeddings + RRF over customer reviews, measured on 30 labeled queries |
 | 5 | Model router | Trained classifier choosing cheap vs strong model, accuracy vs cost |
-| 6 | Evals & LLMOps | 62 cases with ground truth from the data generator, LLM-as-judge, versioned prompts, CI gate |
+| 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, LLM-as-judge, versioned prompts, CI gate |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
 
