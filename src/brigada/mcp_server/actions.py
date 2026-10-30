@@ -48,11 +48,24 @@ def _clean_actor(name: str) -> str:
     return name
 
 
+class OutOfScopeError(NotFoundError):
+    """The action exists but belongs to a restaurant the caller may not see.
+
+    Same message as a missing action, so the caller cannot tell them apart; the audit keeps the
+    real restaurant, so its owner can see the probe.
+    """
+
+    def __init__(self, action_id: int, restaurant_id: int) -> None:
+        super().__init__(f"pending action {action_id} does not exist")
+        self.restaurant_id = restaurant_id
+
+
 def _lock_pending(conn: Conn, action_id: int, scope: frozenset[int] | None) -> PendingAction:
     row = conn.execute(f"{_SELECT} WHERE id = %s FOR UPDATE", (action_id,)).fetchone()
-    # Out of scope looks exactly like missing: a caller cannot probe other restaurants' ids.
-    if row is None or (scope is not None and row["restaurant_id"] not in scope):
+    if row is None:
         raise NotFoundError(f"pending action {action_id} does not exist")
+    if scope is not None and row["restaurant_id"] not in scope:
+        raise OutOfScopeError(action_id, row["restaurant_id"])
     action = _to_model(row)
     if action.status != "pending":
         raise InvalidStateError(f"action {action_id} is already {action.status}")
@@ -112,10 +125,19 @@ def _decide(
     # ``actor`` is the name the person typed; ``principal`` is who authenticated (the API key
     # id), so the audit does not rest on a self-reported name alone.
     args = {"action_id": action_id, "note": note, "principal": principal}
+    restaurant_id: int | None = None
     try:
         with connect() as conn, conn.transaction():
             action = _lock_pending(conn, action_id, scope)
-            effect = apply(conn, action)
+            restaurant_id = action.restaurant_id
+            try:
+                effect = apply(conn, action)
+            except NotFoundError as exc:
+                # The dish or ingredient is gone (or the payload points at another tenant):
+                # the action exists, so this is a conflict, not "no such action".
+                raise InvalidStateError(
+                    f"action {action_id} was not applied: its target no longer exists"
+                ) from exc
             row = conn.execute(
                 "UPDATE pending_actions SET status = %s, decided_by = %s, decided_at = now(), "
                 "decision_note = %s WHERE id = %s RETURNING *",
@@ -135,7 +157,11 @@ def _decide(
             return decided
     except Exception as exc:
         audit.record_standalone(
-            tool=tool, args=args, error=f"{type(exc).__name__}: {exc}", approved_by=actor
+            tool=tool,
+            args=args,
+            error=f"{type(exc).__name__}: {exc}",
+            approved_by=actor,
+            restaurant_id=getattr(exc, "restaurant_id", restaurant_id),
         )
         raise
 

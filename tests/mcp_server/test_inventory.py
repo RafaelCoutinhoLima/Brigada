@@ -10,7 +10,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from brigada.mcp_server import actions
 from brigada.mcp_server.db import Conn
-from brigada.mcp_server.errors import NotFoundError
+from brigada.mcp_server.errors import InvalidStateError, NotFoundError
 from brigada.mcp_server.server import BrigadaMCPServer
 from scripts.seed_data import Dataset, generate
 from scripts.seed_inventory import Inventory, dish_cost, generate_inventory, stock_on_hand
@@ -186,8 +186,11 @@ async def test_approval_rechecks_the_ingredient_belongs_to_the_restaurant(
         "WHERE id = %s",
         (str(salmon.id), out["action_id"]),
     )
-    with pytest.raises(NotFoundError, match="does not exist in restaurant 1"):
+    with pytest.raises(InvalidStateError, match="target no longer exists") as exc:
         actions.approve(out["action_id"], approved_by="gerente")
+    # The tenant guard is what refused it.
+    assert isinstance(exc.value.__cause__, NotFoundError)
+    assert "does not exist in restaurant 1" in str(exc.value.__cause__)
 
 
 async def test_stock_levels_only_lists_the_restaurants_own_ingredients(
