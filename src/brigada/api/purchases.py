@@ -40,6 +40,18 @@ def list_orders(
     return actions.list_purchase_orders(None if status_ == "all" else status_, restaurant_ids=scope)
 
 
+class CancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    cancelled_by: str = Field(min_length=1, max_length=100)
+
+
+def _http(exc: Exception) -> HTTPException:
+    not_found = isinstance(exc, NotFoundError)
+    code = status.HTTP_404_NOT_FOUND if not_found else status.HTTP_409_CONFLICT
+    return HTTPException(code, detail=str(exc))
+
+
 @router.post("/{order_id}/receive", response_model=PurchaseOrder)
 def receive(
     order_id: Annotated[int, Path(gt=0)],
@@ -52,7 +64,21 @@ def receive(
         return actions.receive_purchase(
             order_id, body.received_by, body.unit_cost, restaurant_ids=allowed, principal=key_id
         )
-    except NotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except InvalidStateError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (NotFoundError, InvalidStateError) as exc:
+        raise _http(exc) from exc
+
+
+@router.post("/{order_id}/cancel", response_model=PurchaseOrder)
+def cancel(
+    order_id: Annotated[int, Path(gt=0)],
+    body: CancelRequest,
+    allowed: Annotated[frozenset[int], Depends(get_allowed_restaurants)],
+    key_id: Annotated[str, Depends(get_key_id)],
+) -> PurchaseOrder:
+    """The supplier will not deliver: stop counting the order as stock on the way."""
+    try:
+        return actions.cancel_purchase(
+            order_id, body.cancelled_by, restaurant_ids=allowed, principal=key_id
+        )
+    except (NotFoundError, InvalidStateError) as exc:
+        raise _http(exc) from exc

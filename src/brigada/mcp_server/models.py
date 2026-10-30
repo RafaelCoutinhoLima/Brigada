@@ -315,6 +315,7 @@ class PurchaseOrder(_Output):
     received_at: datetime | None
     received_by: str | None
     unit_cost: float | None
+    overdue: bool = Field(description="Still not received past lead time + safety days.")
 
 
 # --------------------------------------------------------------------------------------
@@ -342,7 +343,12 @@ class StockLevel(_Output):
     safety_days: int
     reorder_point: float = Field(description="avg_daily_use x (lead_time_days + safety_days).")
     on_order: float = Field(
-        description="Approved purchases not received yet. Already ordered: do not propose again."
+        description="Approved purchases on the way (not overdue). Already ordered: do not "
+        "propose again."
+    )
+    overdue_on_order: float = Field(
+        description="Ordered but late (past lead time + safety days): not counted as on the "
+        "way. Tell the owner the order is late."
     )
     below_reorder_point: bool = Field(description="on_hand + on_order < reorder_point.")
     runs_out_before_delivery: bool = Field(description="cover_days < lead_time_days.")

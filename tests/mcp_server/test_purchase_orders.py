@@ -114,3 +114,63 @@ def test_receipt_needs_a_name_and_a_positive_price() -> None:
         actions.receive_purchase(1, "  ", Decimal("1"))
     with pytest.raises(ValueError, match="positive"):
         actions.receive_purchase(1, "x", Decimal("0"))
+
+
+async def test_a_cancelled_order_brings_the_shortage_back(
+    server: BrigadaMCPServer, db: Conn
+) -> None:
+    order = await approve_purchase(server, db, qty=20)
+    cancelled = actions.cancel_purchase(order["purchase_order_id"], "gerente")
+    assert cancelled.status == "cancelled"
+    level = mozzarella(db)
+    assert level["on_order"] == 0 and level["below_reorder_point"]
+    with pytest.raises(InvalidStateError, match="already cancelled"):
+        actions.cancel_purchase(order["purchase_order_id"], "gerente")
+    with pytest.raises(InvalidStateError, match="already cancelled"):
+        actions.receive_purchase(order["purchase_order_id"], "x", Decimal("1"))
+
+
+async def test_a_late_order_stops_hiding_the_shortage(server: BrigadaMCPServer, db: Conn) -> None:
+    """A delivery that never comes must not keep the ingredient off the shopping list."""
+    order = await approve_purchase(server, db, qty=20)
+    db.execute(
+        "UPDATE purchase_orders SET ordered_at = now() - interval '30 days' WHERE id = %s",
+        (order["purchase_order_id"],),
+    )
+    level = mozzarella(db)
+    assert level["on_order"] == 0 and level["overdue_on_order"] == 20
+    assert level["below_reorder_point"]
+    (listed,) = [
+        o
+        for o in actions.list_purchase_orders()
+        if o.purchase_order_id == order["purchase_order_id"]
+    ]
+    assert listed.overdue
+
+
+async def test_receipts_take_ids_from_the_sequence_not_a_table_lock(
+    server: BrigadaMCPServer, db: Conn
+) -> None:
+    order = await approve_purchase(server, db, qty=1)
+    actions.receive_purchase(order["purchase_order_id"], "x", Decimal("2"))
+    row = db.execute(
+        "SELECT movement_id FROM purchase_orders WHERE id = %s", (order["purchase_order_id"],)
+    ).fetchone()
+    # Above every seeded id: a reseed can never collide with a receipt.
+    assert row is not None and row["movement_id"] >= 1_000_000_000
+
+
+async def test_an_out_of_scope_receipt_is_audited_under_the_orders_restaurant(
+    server: BrigadaMCPServer, db: Conn
+) -> None:
+    order = await approve_purchase(server, db, qty=1)
+    with pytest.raises(NotFoundError):
+        actions.receive_purchase(
+            order["purchase_order_id"], "x", Decimal("1"), restaurant_ids=frozenset({3})
+        )
+    row = db.execute(
+        "SELECT restaurant_id, error FROM tool_audit WHERE tool = 'human.receive_purchase' "
+        "AND (args->>'purchase_order_id')::bigint = %s",
+        (order["purchase_order_id"],),
+    ).fetchone()
+    assert row is not None and row["restaurant_id"] == 1 and "NotFoundError" in row["error"]

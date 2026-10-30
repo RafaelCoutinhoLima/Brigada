@@ -64,7 +64,7 @@ def order(client: TestClient) -> Iterator[int]:
             purge_audit(
                 db,
                 "(tool LIKE 'human.%%' AND (args->>'action_id')::bigint = %s) OR "
-                "(tool = 'human.receive_purchase' "
+                "(tool IN ('human.receive_purchase', 'human.cancel_purchase') "
                 "AND (args->>'purchase_order_id')::bigint = %s)",
                 (action_id, po["id"]),
             )
@@ -111,3 +111,18 @@ def test_another_restaurant_gets_404(client: TestClient, order: int) -> None:
 )
 def test_receipt_body_is_validated(client: TestClient, body: dict[str, Any]) -> None:
     assert client.post("/purchase-orders/1/receive", json=body).status_code == 422
+
+
+def test_cancel_route(client: TestClient, order: int) -> None:
+    other = client.post(
+        f"/purchase-orders/{order}/cancel",
+        json={"cancelled_by": "x"},
+        headers={"X-API-Key": "other-key"},
+    )
+    assert other.status_code == 404
+    r = client.post(f"/purchase-orders/{order}/cancel", json={"cancelled_by": "dono"})
+    assert r.status_code == 200 and r.json()["status"] == "cancelled"
+    assert (
+        client.post(f"/purchase-orders/{order}/cancel", json={"cancelled_by": "dono"}).status_code
+        == 409
+    )
