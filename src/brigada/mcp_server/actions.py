@@ -48,10 +48,24 @@ def _clean_actor(name: str) -> str:
     return name
 
 
-def _lock_pending(conn: Conn, action_id: int) -> PendingAction:
+class OutOfScopeError(NotFoundError):
+    """The action exists but belongs to a restaurant the caller may not see.
+
+    Same message as a missing action, so the caller cannot tell them apart; the audit keeps the
+    real restaurant, so its owner can see the probe.
+    """
+
+    def __init__(self, action_id: int, restaurant_id: int) -> None:
+        super().__init__(f"pending action {action_id} does not exist")
+        self.restaurant_id = restaurant_id
+
+
+def _lock_pending(conn: Conn, action_id: int, scope: frozenset[int] | None) -> PendingAction:
     row = conn.execute(f"{_SELECT} WHERE id = %s FOR UPDATE", (action_id,)).fetchone()
     if row is None:
         raise NotFoundError(f"pending action {action_id} does not exist")
+    if scope is not None and row["restaurant_id"] not in scope:
+        raise OutOfScopeError(action_id, row["restaurant_id"])
     action = _to_model(row)
     if action.status != "pending":
         raise InvalidStateError(f"action {action_id} is already {action.status}")
@@ -104,13 +118,26 @@ def _decide(
     note: str | None,
     apply: Callable[[Conn, PendingAction], dict[str, Any] | None],
     new_status: ActionStatus,
+    scope: frozenset[int] | None,
+    principal: str | None,
 ) -> PendingAction:
     actor = _clean_actor(actor)
-    args = {"action_id": action_id, "note": note}
+    # ``actor`` is the name the person typed; ``principal`` is who authenticated (the API key
+    # id), so the audit does not rest on a self-reported name alone.
+    args = {"action_id": action_id, "note": note, "principal": principal}
+    restaurant_id: int | None = None
     try:
         with connect() as conn, conn.transaction():
-            action = _lock_pending(conn, action_id)
-            effect = apply(conn, action)
+            action = _lock_pending(conn, action_id, scope)
+            restaurant_id = action.restaurant_id
+            try:
+                effect = apply(conn, action)
+            except NotFoundError as exc:
+                # The dish or ingredient is gone (or the payload points at another tenant):
+                # the action exists, so this is a conflict, not "no such action".
+                raise InvalidStateError(
+                    f"action {action_id} was not applied: its target no longer exists"
+                ) from exc
             row = conn.execute(
                 "UPDATE pending_actions SET status = %s, decided_by = %s, decided_at = now(), "
                 "decision_note = %s WHERE id = %s RETURNING *",
@@ -130,27 +157,71 @@ def _decide(
             return decided
     except Exception as exc:
         audit.record_standalone(
-            tool=tool, args=args, error=f"{type(exc).__name__}: {exc}", approved_by=actor
+            tool=tool,
+            args=args,
+            error=f"{type(exc).__name__}: {exc}",
+            approved_by=actor,
+            restaurant_id=getattr(exc, "restaurant_id", restaurant_id),
         )
         raise
 
 
-def approve(action_id: int, approved_by: str, note: str | None = None) -> PendingAction:
-    """Execute a pending action on behalf of a human. Raises if it is not pending."""
-    return _decide("human.approve", action_id, approved_by, note, _execute, "executed")
+def approve(
+    action_id: int,
+    approved_by: str,
+    note: str | None = None,
+    *,
+    restaurant_ids: frozenset[int] | None = None,
+    principal: str | None = None,
+) -> PendingAction:
+    """Execute a pending action on behalf of a human. Raises if it is not pending.
+
+    ``restaurant_ids`` limits which restaurants' actions the caller may decide (the HTTP API
+    passes the API key's scope); ``None`` is the trusted CLI, which sees everything.
+    ``principal`` is recorded in the audit next to the name (the HTTP API passes the key id).
+    """
+    return _decide(
+        "human.approve",
+        action_id,
+        approved_by,
+        note,
+        _execute,
+        "executed",
+        restaurant_ids,
+        principal,
+    )
 
 
-def reject(action_id: int, rejected_by: str, note: str | None = None) -> PendingAction:
+def reject(
+    action_id: int,
+    rejected_by: str,
+    note: str | None = None,
+    *,
+    restaurant_ids: frozenset[int] | None = None,
+    principal: str | None = None,
+) -> PendingAction:
     """Reject a pending action without applying it. Raises if it is not pending."""
-    return _decide("human.reject", action_id, rejected_by, note, lambda _c, _a: None, "rejected")
+    return _decide(
+        "human.reject",
+        action_id,
+        rejected_by,
+        note,
+        lambda _c, _a: None,
+        "rejected",
+        restaurant_ids,
+        principal,
+    )
 
 
-def list_actions(status: ActionStatus | None = "pending") -> list[PendingAction]:
-    """List actions, oldest first. ``status=None`` lists all."""
+def list_actions(
+    status: ActionStatus | None = "pending", *, restaurant_ids: frozenset[int] | None = None
+) -> list[PendingAction]:
+    """List actions, oldest first. ``status=None`` lists all; ``restaurant_ids`` limits scope."""
     with connect() as conn:
         rows = conn.execute(
-            f"{_SELECT} WHERE (%(s)s::text IS NULL OR status = %(s)s::text) ORDER BY id",
-            {"s": status},
+            f"{_SELECT} WHERE (%(s)s::text IS NULL OR status = %(s)s::text) "
+            "AND (%(r)s::bigint[] IS NULL OR restaurant_id = ANY(%(r)s::bigint[])) ORDER BY id",
+            {"s": status, "r": sorted(restaurant_ids) if restaurant_ids is not None else None},
         ).fetchall()
     return [_to_model(r) for r in rows]
 
