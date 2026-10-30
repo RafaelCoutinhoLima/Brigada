@@ -90,6 +90,33 @@ async def test_extra_round_steps_inherit_taint_from_any_finding() -> None:
     assert blocked["is_error"] is True and "disabled" in blocked["content"]
 
 
+@pytest.mark.db
+async def test_a_step_that_read_reviews_and_then_failed_still_taints_the_next_round() -> None:
+    # Red team R2: the failed step's partial run read customer text; the extra step the
+    # critic asks for must not be able to act on it.
+    client = RoleClient(
+        planner=[plan(s("s1", "sales"), s("s2", "menu", task="leia as avaliações"))],
+        sales=[message(text("Ontem: R$ 10,00."))],
+        menu=[
+            message(
+                tool_use("toolu_r", "reviews_for_item", restaurant_id=1, limit=3),
+                stop_reason="tool_use",
+            ),
+            bad_request(),  # the step dies after reading the reviews
+            message(tool_use("toolu_p", "create_promotion", **PROMO), stop_reason="tool_use"),
+            message(text("Não foi possível criar.")),
+        ],
+        synthesizer=[message(text("R$ 10,00; avaliações indisponíveis.")), message(text("ok"))],
+        critic=[
+            review(False, "faltou agir", extra=[s("s3", "menu", task="crie a promoção pedida")]),
+            review(True),
+        ],
+    )
+    await run(client)
+    blocked = client.messages.requests["menu"][-1]["messages"][-1]["content"][0]
+    assert blocked["is_error"] is True and "disabled" in blocked["content"]
+
+
 async def test_critic_cannot_reuse_the_id_of_a_step_that_ran() -> None:
     client = RoleClient(
         planner=[plan(s("s1", "sales"))],

@@ -308,10 +308,12 @@ class _Orchestration:
                 # Its cost is real and its tool calls happened (a write may have been proposed):
                 # both must reach the totals that the API reports and the evals score.
                 self._add(partial, specialist=True)
-            return StepOutcome(step, run_id, error=exc, tainted=tainted, partial=partial)
+            # A step that read reviews and then failed is as tainted as one that finished: its
+            # partial findings can still reach later steps and the synthesis.
+            read = partial is not None and _read_untrusted(partial)
+            return StepOutcome(step, run_id, error=exc, tainted=tainted or read, partial=partial)
         self._add(result, specialist=True)
-        read_reviews = any(c.name in UNTRUSTED_OUTPUT_TOOLS for c in result.tools_called)
-        return StepOutcome(step, run_id, result=result, tainted=tainted or read_reviews)
+        return StepOutcome(step, run_id, result=result, tainted=tainted or _read_untrusted(result))
 
     def _step_question(self, step: PlanStep, deps: list[StepOutcome]) -> str:
         text = f"{step.task}\n\nPergunta original do dono: «{self.question}»"
@@ -368,3 +370,7 @@ __all__ = [
     "answer",
     "orchestrate",
 ]
+
+
+def _read_untrusted(result: RunResult) -> bool:
+    return any(c.name in UNTRUSTED_OUTPUT_TOOLS for c in result.tools_called)
