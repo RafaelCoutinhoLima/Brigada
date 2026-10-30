@@ -266,7 +266,13 @@ async def resume_persisted(
     """
     if record.status == "succeeded":
         raise ValueError(f"run {record.id!r} already succeeded")
-    if record.messages and record.messages[-1]["role"] == "assistant" and not _pending(record):
+    # A structured role that stopped on prose is resumable: the loop adds the reminder.
+    if (
+        record.messages
+        and record.messages[-1]["role"] == "assistant"
+        and not _pending(record)
+        and not agent.config.terminal_tools
+    ):
         raise ValueError(
             f"run {record.id!r} ended on a truncated or refused answer; ask the question again"
         )

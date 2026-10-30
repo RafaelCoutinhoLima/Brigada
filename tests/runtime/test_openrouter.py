@@ -74,6 +74,23 @@ async def create(server: Server, **kwargs: Any) -> Any:
 # ---- request translation ----------------------------------------------------------------
 
 
+async def test_cacheable_system_blocks_become_one_system_message() -> None:
+    server = Server(completion("ok"))
+    await create(
+        server,
+        system=[
+            {"type": "text", "text": "Instruções. ", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "Contexto."},
+        ],
+        cache_control={"type": "ephemeral"},
+        tools=[{"name": "t", "description": "d", "input_schema": {}, "strict": True}],
+    )
+    body = server.bodies[0]
+    assert body["messages"][0] == {"role": "system", "content": "Instruções. Contexto."}
+    # Neither caching nor Anthropic's strict flag has an equivalent here.
+    assert "cache_control" not in body and "strict" not in body["tools"][0]["function"]
+
+
 async def test_conversation_with_tool_round_trip_is_translated() -> None:
     server = Server(completion("ok"))
     await create(

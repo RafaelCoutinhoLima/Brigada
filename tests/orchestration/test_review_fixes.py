@@ -9,7 +9,7 @@ from anthropic.types import Message
 from brigada.mcp_server.server import build_server
 from brigada.orchestration import orchestrate
 from brigada.orchestration.orchestrator import _neutral
-from tests.runtime.fakes import message, text, tool_use
+from tests.runtime.fakes import message, system_text, text, tool_use
 
 from .test_orchestrator import QUESTION, TODAY, RoleClient, bad_request, plan, review, run, s
 
@@ -110,7 +110,7 @@ class BarrierClient(RoleClient):
         inner = self.messages.create
 
         async def create(**kwargs: Any) -> Message:
-            if any(p in kwargs["system"] for p in ("especialista de Vendas", "de Operações")):
+            if any(p in system_text(kwargs) for p in ("especialista de Vendas", "de Operações")):
                 await asyncio.wait_for(barrier.wait(), timeout=2)
             return await inner(**kwargs)
 
@@ -194,6 +194,6 @@ async def test_planner_knows_the_restaurant_name_to_refuse_other_restaurants() -
     finally:
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
             conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
-    system = client.messages.requests["planner"][0]["system"]
+    system = system_text(client.messages.requests["planner"][0])
     assert "restaurante do dono: Sabor da Casa (restaurant_id 2)" in system
     assert "outro restaurante" in system  # the rule the name is there for

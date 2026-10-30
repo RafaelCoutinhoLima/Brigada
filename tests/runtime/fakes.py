@@ -38,6 +38,12 @@ def tool_use(id: str, name: str, **input: Any) -> dict[str, Any]:
     return {"type": "tool_use", "id": id, "name": name, "input": input}
 
 
+def system_text(request: dict[str, Any]) -> str:
+    """The system prompt of a recorded request: the loop sends it as cacheable text blocks."""
+    system = request["system"]
+    return system if isinstance(system, str) else "".join(b["text"] for b in system)
+
+
 class FakeMessages:
     def __init__(self, script: list[Message | Exception]) -> None:
         self.script = list(script)

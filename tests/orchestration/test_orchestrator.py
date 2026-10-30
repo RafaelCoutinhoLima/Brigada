@@ -19,7 +19,7 @@ from brigada.mcp_server.server import build_server
 from brigada.orchestration import orchestrate
 from brigada.orchestration.store import OrchestrationStore
 from brigada.runtime.state import RunStore
-from tests.runtime.fakes import message, text, tool_use
+from tests.runtime.fakes import message, system_text, text, tool_use
 
 TODAY = date(2026, 10, 28)
 QUESTION = "Por que minhas vendas caíram na última terça?"
@@ -42,7 +42,7 @@ class RoleMessages:
         self.requests: dict[str, list[dict[str, Any]]] = {}
 
     async def create(self, **kwargs: Any) -> Message:
-        role = next(r for phrase, r in ROLES.items() if phrase in kwargs["system"])
+        role = next(r for phrase, r in ROLES.items() if phrase in system_text(kwargs))
         self.requests.setdefault(role, []).append(copy.deepcopy(kwargs))
         if not self.scripts.get(role):
             raise AssertionError(f"{role} called more times than scripted")
@@ -121,8 +121,15 @@ async def test_parallel_steps_are_merged_and_reviewed() -> None:
     assert "sem origem em ferramenta (checagem automática): 0, 1,02, 2.496,60" in critic_prompt
     assert result.steps == 5  # planner, two specialists, synthesizer, critic
     assert result.cost_usd > 0 and isinstance(result.cost_usd, Decimal)
-    tools = client.messages.requests["planner"][0]
-    assert tools["tool_choice"] == {"type": "tool", "name": "submit_plan"}
+    planner_request = client.messages.requests["planner"][0]
+    # No forced tool_choice (the 5.5 models answer it with a 400); strict keeps the input valid.
+    assert "tool_choice" not in planner_request
+    (tool,) = planner_request["tools"]
+    assert tool["name"] == "submit_plan" and tool["strict"] is True
+    # Constraints strict cannot express live in the description; Pydantic still enforces them.
+    step = tool["input_schema"]["properties"]["steps"]["items"]
+    assert "pattern" not in step["properties"]["id"]
+    assert "^s[0-9]{1,2}$" in step["properties"]["id"]["description"]
 
 
 async def test_a_single_finding_is_the_answer_without_synthesis() -> None:

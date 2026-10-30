@@ -12,6 +12,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 
+from anthropic import transform_schema
+from anthropic.types import ToolParam
 from pydantic import BaseModel, ValidationError
 
 from brigada.config import get_settings
@@ -28,6 +30,8 @@ SUBMIT_PLAN = "submit_plan"
 # critic to reach its submit_review call (it ended in max_tokens with no content).
 STRUCTURED_MAX_TOKENS = 8000
 SUBMIT_REVIEW = "submit_review"
+# Bump when the way structured roles answer changes (it is part of their prompt hash).
+STRUCTURED_PROTOCOL = "tool_choice=auto; strict tool; prose gets a reminder"
 _WEEKDAYS = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
 
 
@@ -149,21 +153,35 @@ def _structured[M: BaseModel](
             raise ToolExecutionError(f"invalid {tool} input, fix and call again: {exc}") from exc
         return value.model_dump_json()
 
+    tool_param: ToolParam = {
+        "name": tool,
+        "description": description,
+        # strict guarantees the *shape* of the input. It does not guarantee that the model calls
+        # the tool (the loop's reminder handles prose), nor the rules strict cannot express
+        # (lengths, patterns, "steps or direct_answer"): those move into the descriptions and
+        # ``validate`` still enforces them, sending a violation back for the model to fix.
+        "input_schema": transform_schema(tool_schema(schema)),
+        "strict": True,
+    }
     agent = Agent(
         AgentConfig(
             name=name,
             model=model,
             system=_with_context(prefix, restaurant_id, today, restaurant_name),
-            max_steps=3,
+            # One reminder (prose instead of the tool) plus one fix (a rejected input) still
+            # leave a call to get it right.
+            max_steps=4,
             max_tokens=STRUCTURED_MAX_TOKENS,
             terminal_tools=frozenset({tool}),
-            tool_choice={"type": "tool", "name": tool},
         ),
         client,
-        [{"name": tool, "description": description, "input_schema": tool_schema(schema)}],
+        [tool_param],
         validate,
     )
-    return Role(agent, _sha(prefix + json.dumps(tool_schema(schema), sort_keys=True)))
+    # The hash covers what is actually sent, plus the protocol around it, so a run started
+    # under the old forced tool_choice is not resumed under this one.
+    contract = json.dumps(tool_param, sort_keys=True) + STRUCTURED_PROTOCOL
+    return Role(agent, _sha(prefix + contract))
 
 
 def _with_context(prefix: str, restaurant_id: int, today: date, name: str | None) -> str:

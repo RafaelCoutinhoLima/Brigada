@@ -16,9 +16,14 @@ from brigada.runtime.agent import Agent, AgentConfig
 from brigada.runtime.retry import RetryPolicy
 from brigada.runtime.sales import ask_sales, resume_sales
 from brigada.runtime.state import RunStore, resume_persisted, run_persisted
-from brigada.runtime.types import MaxStepsExceeded, ResponseTruncated, ToolCall
+from brigada.runtime.types import (
+    MaxStepsExceeded,
+    NoStructuredAnswer,
+    ResponseTruncated,
+    ToolCall,
+)
 
-from .fakes import MODEL, FakeClient, message, text, tool_use
+from .fakes import MODEL, FakeClient, message, system_text, text, tool_use
 
 pytestmark = pytest.mark.db
 
@@ -197,7 +202,7 @@ async def test_sales_run_resumes_with_original_date_and_restaurant(store: RunSto
         )
     second = FakeClient(message(text("ok")))
     await resume_sales(rid, store, client=second, server=build_server())
-    assert "hoje: 2026-10-28" in second.messages.requests[0]["system"]
+    assert "hoje: 2026-10-28" in system_text(second.messages.requests[0])
     assert rows("SELECT status FROM runs WHERE id = %s", rid)[0]["status"] == "succeeded"
 
 
@@ -230,6 +235,34 @@ async def test_max_steps_failure_can_be_resumed_with_a_fresh_budget(store: RunSt
     resumed = make_agent(FakeClient(message(text("pronto"))), Executor())
     result = await resume_persisted(resumed, store, await store.load(rid), prompt_sha256="abc123")
     assert (result.text, result.steps, result.run_id) == ("pronto", 4, rid)
+
+
+async def test_a_structured_role_that_ran_out_on_prose_resumes(store: RunStore) -> None:
+    """Planner/critic: prose until the budget ends is a step-limit failure, not an answer."""
+    rid = run_id()
+    tools: Any = [{"name": "submit", "description": "d", "input_schema": {}}]
+
+    def structured(client: FakeClient) -> Agent:
+        cfg = AgentConfig(
+            name="planner",
+            model=MODEL,
+            system="s",
+            max_steps=2,
+            terminal_tools=frozenset({"submit"}),
+        )
+        return Agent(cfg, client, tools, Executor())
+
+    with pytest.raises(NoStructuredAnswer) as info:
+        await start(structured(FakeClient(message(text("a")), message(text("b")))), store, rid)
+    assert info.value.text == "b"
+    record = await store.load(rid)
+    assert record.messages[-1]["role"] == "assistant"  # saved as it stopped
+    client = FakeClient(message(tool_use("toolu_1", "submit"), stop_reason="tool_use"))
+    result = await resume_persisted(structured(client), store, record, prompt_sha256="abc123")
+    assert result.text == '{"total_revenue": 412.3}'
+    # The reminder went in before the model was called again.
+    sent = client.messages.requests[0]["messages"]
+    assert sent[-1]["role"] == "user" and "`submit`" in sent[-1]["content"]
 
 
 async def test_truncated_run_is_not_resumable(store: RunStore) -> None:

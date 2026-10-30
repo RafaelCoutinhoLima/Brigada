@@ -21,6 +21,7 @@ from brigada.runtime.tools import ToolExecutor, run_tools
 from brigada.runtime.types import (
     MaxStepsExceeded,
     ModelRefused,
+    NoStructuredAnswer,
     ResponseTruncated,
     RunResult,
     ToolCall,
@@ -65,6 +66,10 @@ class _NoObserver:
         return None
 
 
+# 5-minute TTL: an orchestration and the owner's follow-up questions start well inside it.
+EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     name: str
@@ -75,9 +80,9 @@ class AgentConfig:
     tool_timeout_seconds: float = 15.0
     retry: RetryPolicy = DEFAULT_POLICY
     # Structured output: a successful call to one of these tools ends the run, and its result
-    # becomes the answer. Combined with a forced ``tool_choice`` the model must answer
-    # through the tool, whose executor validates the input (a rejected one goes back as an
-    # error for the model to fix).
+    # becomes the answer. The executor validates the input (a rejected one goes back as an
+    # error for the model to fix), and an answer in prose gets a reminder to call the tool.
+    # ``tool_choice`` stays "auto": the 5.5 models reject a forced choice with a 400.
     terminal_tools: frozenset[str] = frozenset()
     tool_choice: dict[str, Any] | None = None
 
@@ -139,6 +144,10 @@ class Agent:
             if (final := await self._run_tools(messages, result)) is not None:
                 result.text = final
                 return result
+        elif messages[-1]["role"] == "assistant" and self.config.terminal_tools:
+            # A structured role stopped on prose (step limit, or a crash before the reminder
+            # was saved): that is not an answer, so the reminder goes in and the run continues.
+            messages.append({"role": "user", "content": self._terminal_reminder()})
         elif messages[-1]["role"] == "assistant":
             # The model already answered; calling it again would send an assistant-last
             # conversation (a prefill), which current models reject.
@@ -146,6 +155,17 @@ class Agent:
         while result.steps < limit:
             response = await self._call_model(messages, result)
             match response.stop_reason:
+                case "end_turn" | "stop_sequence" if self.config.terminal_tools:
+                    # With tool_choice "auto" the model may answer in prose instead of calling
+                    # the terminal tool. Prose is not the structured answer: ask again, inside
+                    # the same step budget (append-only, so the cached prefix survives).
+                    prose = "".join(b.text for b in response.content if b.type == "text")
+                    if result.steps >= limit:
+                        result.text = prose
+                        raise NoStructuredAnswer(
+                            self.config.max_steps, self.config.terminal_tools, prose
+                        )
+                    messages.append({"role": "user", "content": self._terminal_reminder()})
                 case "end_turn" | "stop_sequence":
                     result.text = "".join(b.text for b in response.content if b.type == "text")
                     return result
@@ -177,7 +197,12 @@ class Agent:
                 lambda: self.client.messages.create(
                     model=cfg.model,
                     max_tokens=cfg.max_tokens,
-                    system=cfg.system,
+                    # Two cache breakpoints. The one on the system block covers tools + system
+                    # (tools render first), shared by every run of this agent with the same
+                    # restaurant and day. The top-level one moves with the conversation, so
+                    # each step of the loop reads the previous steps from cache.
+                    system=[{"type": "text", "text": cfg.system, "cache_control": EPHEMERAL}],
+                    cache_control=EPHEMERAL,
                     messages=messages,
                     **self._tool_params(),
                 ),
@@ -187,7 +212,13 @@ class Agent:
             cost = record_usage(span, cfg.model, response.usage)
             span.set_attribute("brigada.stop_reason", str(response.stop_reason))
         result.steps = step
-        result.tokens_in += response.usage.input_tokens
+        # With caching, input_tokens only counts the uncached part; the prompt is all three.
+        usage = response.usage
+        result.tokens_in += (
+            usage.input_tokens
+            + (usage.cache_read_input_tokens or 0)
+            + (usage.cache_creation_input_tokens or 0)
+        )
         result.tokens_out += response.usage.output_tokens
         result.cost_usd += cost
         # The full content goes back, not just the text: tool_use blocks (and thinking blocks on
@@ -195,6 +226,10 @@ class Agent:
         messages.append({"role": "assistant", "content": [b.to_dict() for b in response.content]})
         await self.observer.on_model_response(step, response, cost, latency_ms, messages)
         return response
+
+    def _terminal_reminder(self) -> str:
+        names = ", ".join(f"`{n}`" for n in sorted(self.config.terminal_tools))
+        return f"Você respondeu em texto. Entregue a resposta chamando a ferramenta {names}."
 
     def _tool_params(self) -> dict[str, Any]:
         if not self.tools:

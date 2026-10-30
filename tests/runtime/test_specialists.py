@@ -25,7 +25,7 @@ from brigada.runtime.specialists import (
 )
 from brigada.runtime.state import RunStore
 
-from .fakes import FakeClient, message, text, tool_use
+from .fakes import FakeClient, message, system_text, text, tool_use
 
 TODAY = date(2026, 10, 28)
 REQUEST = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -100,7 +100,7 @@ async def test_resume_picks_the_specialist_that_started_the_run(store: RunStore)
     second = FakeClient(message(text("ok")))
     await resume(rid, store, client=second, server=build_server())
     request = second.messages.requests[0]
-    assert "especialista de Operações" in request["system"]
+    assert "especialista de Operações" in system_text(request)
     assert sorted(t["name"] for t in request["tools"]) == sorted(OPERATIONS.tools)
     with pytest.raises(ValueError, match="belongs to agent 'operations'"):
         await resume(rid, store, client=FakeClient(), server=build_server(), expected=SALES)

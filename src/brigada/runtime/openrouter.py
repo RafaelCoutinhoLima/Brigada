@@ -55,7 +55,7 @@ class OpenRouterMessages:
         model: str,
         max_tokens: int,
         messages: Iterable[Mapping[str, Any]],
-        system: str | None = None,
+        system: str | Iterable[Mapping[str, Any]] | None = None,
         tools: Iterable[Mapping[str, Any]] | None = None,
         tool_choice: Mapping[str, Any] | None = None,
         **ignored: Any,
@@ -115,8 +115,11 @@ class OpenRouterClient:
 
 
 def to_openai_messages(
-    system: str | None, messages: Iterable[Mapping[str, Any]]
+    system: str | Iterable[Mapping[str, Any]] | None, messages: Iterable[Mapping[str, Any]]
 ) -> list[dict[str, Any]]:
+    if system is not None and not isinstance(system, str):
+        # Anthropic text blocks; their cache_control has no equivalent here and is dropped.
+        system = "".join(b.get("text", "") for b in system)
     out: list[dict[str, Any]] = [{"role": "system", "content": system}] if system else []
     for m in messages:
         content = m["content"]

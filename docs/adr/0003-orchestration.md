@@ -29,7 +29,8 @@ Restrições que importam:
 2. **Planner que devolve JSON em texto livre.** Funciona, mas exige parsing frágil e não dá
    ao modelo um caminho para corrigir um plano inválido.
 3. **Planner e crítico respondendo por uma ferramenta "terminal" validada** (escolhida). O
-   modelo é obrigado (`tool_choice`) a chamar `submit_plan`/`submit_review`; o executor da
+   modelo responde chamando `submit_plan`/`submit_review` (no início com `tool_choice`
+   forçado; desde o ADR 0006, `auto` com ferramenta `strict` e lembrete); o executor da
    ferramenta valida com Pydantic (ids, especialistas conhecidos, dependências existentes,
    sem ciclos). Entrada inválida volta como erro de ferramenta e o modelo corrige, dentro de
    um limite de passos. Entrada válida encerra o loop.
