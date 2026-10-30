@@ -63,7 +63,7 @@ def stdio_server() -> StdioServerParameters:
     # search_reviews embeds its query: the child gets the embedding key and model only, never
     # the chat model keys.
     s = get_settings()
-    if key := s.embedding_api_key or s.openrouter_api_key:
+    if key := s.embedding_api_key:  # never the chat key as a fallback
         env["EMBEDDING_API_KEY"] = key
         env["EMBEDDING_MODEL"] = s.embedding_model
         env["OPENROUTER_BASE_URL"] = s.openrouter_base_url

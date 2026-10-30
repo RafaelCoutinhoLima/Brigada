@@ -219,13 +219,18 @@ def test_child_process_gets_the_embedding_key_but_no_chat_key(
 ) -> None:
     from brigada.config import Settings
 
-    settings = Settings(
-        openrouter_api_key="sk-or-canary",
-        anthropic_api_key="sk-ant-canary",
+    chat_only = Settings(
+        openrouter_api_key="sk-or-chat",
+        anthropic_api_key="sk-ant-chat",
         model_provider="openrouter",
     )
-    monkeypatch.setattr("brigada.runtime.mcp_tools.get_settings", lambda: settings)
+    monkeypatch.setattr("brigada.runtime.mcp_tools.get_settings", lambda: chat_only)
     env = stdio_server().env or {}
-    assert env["EMBEDDING_API_KEY"] == "sk-or-canary"
-    assert "OPENROUTER_API_KEY" not in env and "ANTHROPIC_API_KEY" not in env
-    assert "sk-ant-canary" not in "".join(env.values())
+    # No dedicated key: the child gets none (keyword search), never the chat key instead.
+    assert "EMBEDDING_API_KEY" not in env
+    assert not any("sk-or-chat" in v or "sk-ant-chat" in v for v in env.values())
+    both = chat_only.model_copy(update={"embedding_api_key": "sk-or-embed"})
+    monkeypatch.setattr("brigada.runtime.mcp_tools.get_settings", lambda: both)
+    env = stdio_server().env or {}
+    assert env["EMBEDDING_API_KEY"] == "sk-or-embed"
+    assert not any("sk-or-chat" in v for v in env.values())

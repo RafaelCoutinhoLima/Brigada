@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 import httpx2
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,8 @@ class OpenRouterEmbedder:
         model: str,
         *,
         base_url: str = "https://openrouter.ai/api/v1",
-        timeout_seconds: float = 30.0,
+        # Short: a search waits for this inside a tool call, and keyword is the fallback.
+        timeout_seconds: float = 5.0,
         transport: httpx2.AsyncBaseTransport | None = None,
     ) -> None:
         if not api_key:
@@ -63,18 +65,37 @@ class OpenRouterEmbedder:
                 response = await self._http.post(
                     "/embeddings", json={"model": self._model, "input": batch}
                 )
-                payload = response.json()
-            except (httpx2.HTTPError, ValueError) as exc:
-                logger.exception("embedding request failed")
+                if response.status_code >= 400:
+                    raise ValueError(f"HTTP {response.status_code}: {response.text[:300]}")
+                data = _EmbeddingResponse.model_validate(response.json()).data
+                if len(data) != len(batch):
+                    raise ValueError(f"{len(data)} embeddings for {len(batch)} inputs")
+                # The API may return items out of order; ``index`` is the position in the input.
+                out.extend(check_vector(d.embedding) for d in sorted(data, key=lambda d: d.index))
+            except (httpx2.HTTPError, ValueError) as exc:  # pydantic's error is a ValueError
+                # Details (status, body) go to the log; the caller only learns it failed.
+                logger.error("embedding request failed: %s", exc)
                 raise EmbeddingError("embedding service unavailable") from exc
-            data = payload.get("data") if isinstance(payload, dict) else None
-            if response.status_code >= 400 or not isinstance(data, list) or len(data) != len(batch):
-                logger.error("embedding error %s: %s", response.status_code, str(payload)[:300])
-                raise EmbeddingError("embedding service unavailable")
-            # The API may return items out of order; ``index`` is the position in the input.
-            for item in sorted(data, key=lambda d: d["index"]):
-                out.append([float(x) for x in item["embedding"]])
+        if len({len(v) for v in out}) > 1:
+            raise EmbeddingError("embedding service returned vectors of different sizes")
         return out
+
+
+class _EmbeddingItem(BaseModel):
+    index: int
+    embedding: list[float] = Field(min_length=1)
+
+
+class _EmbeddingResponse(BaseModel):
+    data: list[_EmbeddingItem]
+
+
+def check_vector(vector: Sequence[float]) -> list[float]:
+    """A vector pgvector can rank: finite numbers, not all zero (cosine of zero is NaN)."""
+    v = [float(x) for x in vector]
+    if not v or not all(math.isfinite(x) for x in v) or not any(v):
+        raise ValueError("embedding is empty, zero or not finite")
+    return v
 
 
 _TOKEN = re.compile(r"\w+")
@@ -112,8 +133,8 @@ def default_embedder() -> Embedder:
     from brigada.config import get_settings
 
     s = get_settings()
+    # The embedding key only: falling back to the OpenRouter key would hand a chat model key to
+    # whoever embeds (the MCP server child). No key = keyword search, reported as such.
     return OpenRouterEmbedder(
-        s.embedding_api_key or s.openrouter_api_key,
-        s.embedding_model,
-        base_url=s.openrouter_base_url,
+        s.embedding_api_key, s.embedding_model, base_url=s.openrouter_base_url
     )
