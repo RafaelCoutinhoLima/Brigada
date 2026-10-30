@@ -10,6 +10,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from brigada.mcp_server import actions
 from brigada.mcp_server.db import Conn
+from brigada.mcp_server.errors import NotFoundError
 from brigada.mcp_server.server import BrigadaMCPServer
 from scripts.seed_data import Dataset, generate
 from scripts.seed_inventory import Inventory, dish_cost, generate_inventory, stock_on_hand
@@ -165,3 +166,34 @@ async def test_purchase_of_another_restaurants_ingredient_is_refused(
 
 def test_period_helper_is_the_eval_period() -> None:
     assert START_DATE == date(2026, 7, 30) and END_DATE == date(2026, 10, 27)
+
+
+async def test_approval_rechecks_the_ingredient_belongs_to_the_restaurant(
+    server: BrigadaMCPServer, db: Conn
+) -> None:
+    # A payload changed after the proposal (or a bug upstream) must not approve across tenants.
+    out = await call(
+        server,
+        "propose_purchase",
+        restaurant_id=1,
+        ingredient_id=ingredient(1, "Mussarela").id,
+        qty=5,
+        reason="reposição",
+    )
+    salmon = ingredient(3, "Salmão")
+    db.execute(
+        "UPDATE pending_actions SET payload = jsonb_set(payload, '{ingredient_id}', %s::jsonb) "
+        "WHERE id = %s",
+        (str(salmon.id), out["action_id"]),
+    )
+    with pytest.raises(NotFoundError, match="does not exist in restaurant 1"):
+        actions.approve(out["action_id"], approved_by="gerente")
+
+
+async def test_stock_levels_only_lists_the_restaurants_own_ingredients(
+    server: BrigadaMCPServer,
+) -> None:
+    for rid in (1, 2, 3):
+        out = await call(server, "stock_levels", restaurant_id=rid)
+        own = {i.id for i in world()[1].ingredients if i.restaurant_id == rid}
+        assert {i["ingredient_id"] for i in out["items"]} == own
