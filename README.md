@@ -76,7 +76,9 @@ _Answerer `brigada.orchestration:answer`, all 50 cases, commit `641eace`, 2026-1
 | vector (cosine, pgvector) | **0.81** | **0.90** | **0.91** | **0.78** |
 | hybrid (RRF, k=60) | 0.74 | 0.90 | 0.89 | 0.67 |
 
-Vector search wins on this corpus, so it is the tool's default; keyword is the reported fallback (`mode: "keyword"`) when embedding fails. Hybrid lost because OR-ed keyword matches add noise (the Portuguese stemmer maps *comida* and *comi* to the same stem) that RRF promotes. It only helped on the planted injection reviews. Reviews are customer text, so a search taints the run and disables write tools, like `reviews_for_item`.
+R-precision by query kind (12 exact wordings, 14 paraphrases, 4 planted injections): keyword 0.91 / 0.31 / 0.44, vector 1.00 / 0.78 / 0.38, hybrid 0.95 / 0.67 / 0.44.
+
+Vector search wins on this corpus, so it is the tool's default. Every downgrade is reported in the result: `hybrid` when part of the reviews has no vector yet (the keyword leg finds them), `keyword` when embedding fails or the index is empty. Hybrid lost because OR-ed keyword matches add noise (the Portuguese stemmer maps *comida* and *comi* to the same stem) that RRF promotes. It only helped on the planted injection reviews. Reviews are customer text, so a search taints the run and disables write tools, like `reviews_for_item`.
 
 Inventory (stock cover, dish margins, CMV, waste, cost changes, purchase proposals that need the owner's approval): 10/11 on the 11 inventory cases on the first live run with `nemotron-3.5-super-vl:free`; the miss (loss share computed over purchases instead of the counted stock) was fixed in the prompt and passes on re-run. Not yet included in the table above.
 
