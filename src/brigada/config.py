@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     database_url: str = "postgresql://brigada:brigada@localhost:5432/brigada"
+    # Review search (rag/): embeddings through OpenRouter's /embeddings, with its key.
+    embedding_model: str = "nvidia/nemotron-3.5-embed-1b:free"
     model_strong: str = "claude-sonnet-4-6"
     model_fast: str = "claude-haiku-4-5"
     max_agent_steps: int = 10
