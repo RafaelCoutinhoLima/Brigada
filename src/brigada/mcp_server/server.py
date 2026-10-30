@@ -20,7 +20,7 @@ import functools
 import logging
 from collections.abc import Callable
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
 import anyio.to_thread
 import psycopg
@@ -29,25 +29,37 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
 from pydantic import BaseModel, ValidationError
 
-from brigada.mcp_server import audit, pending, queries
+from brigada.mcp_server import audit, inventory, pending, queries
 from brigada.mcp_server.db import Conn, connect
 from brigada.mcp_server.errors import DomainError
 from brigada.mcp_server.models import (
+    CmvInput,
+    CmvResult,
+    ConsumptionInput,
+    ConsumptionResult,
+    CostChangesInput,
+    CostChangesResult,
     CreatePromotionInput,
     DeliveryGroupBy,
     DeliveryTimesInput,
     DeliveryTimesResult,
     DiscountPct,
+    DishMarginsInput,
+    DishMarginsResult,
+    IngredientId,
     ListMenuItemsInput,
     ListMenuItemsResult,
     MenuItemId,
     MinReviews,
     PauseMenuItemInput,
     PendingActionCreated,
+    ProposePurchaseInput,
+    PurchaseQty,
     Rating,
     RatingsByItemInput,
     RatingsByItemResult,
     Reason,
+    RecentDays,
     RestaurantId,
     ReviewsForItemInput,
     ReviewsForItemResult,
@@ -55,10 +67,14 @@ from brigada.mcp_server.models import (
     SalesByPeriodInput,
     SalesByPeriodResult,
     SalesGroupBy,
+    StockLevelsInput,
+    StockLevelsResult,
     TopItemsInput,
     TopItemsLimit,
     TopItemsOrderBy,
     TopItemsResult,
+    WasteReportInput,
+    WasteReportResult,
 )
 
 INSTRUCTIONS = (
@@ -419,7 +435,117 @@ def build_server() -> BrigadaMCPServer:
         run_id = audit.current_run_id.get()
         return await _run(functools.partial(pending.propose_promotion, run_id=run_id), inp)
 
+    _register_inventory(server)
     return server
+
+
+def _register_inventory(server: BrigadaMCPServer) -> None:
+    """Stock, recipes and costs. All read-only except propose_purchase (pending action)."""
+
+    @server.tool(annotations=READ_ONLY)
+    async def stock_levels(
+        restaurant_id: RestaurantId, only_below_reorder_point: bool = False
+    ) -> StockLevelsResult:
+        """On-hand stock per ingredient with daily use (last 14 days), days of cover, supplier
+        lead time and reorder point. Lowest cover first. Use for "what will run out?"."""
+        inp = _validate(
+            StockLevelsInput,
+            restaurant_id=restaurant_id,
+            only_below_reorder_point=only_below_reorder_point,
+        )
+        return await _run(inventory.stock_levels, inp)
+
+    @server.tool(annotations=READ_ONLY)
+    async def ingredient_consumption(
+        restaurant_id: RestaurantId,
+        start_date: date,
+        end_date: date,
+        ingredient_id: IngredientId | None = None,
+    ) -> ConsumptionResult:
+        """Per ingredient over local days start..end (inclusive): purchased, used by sales,
+        registered waste, unexplained loss at counts, and mean purchase cost."""
+        inp = _validate(
+            ConsumptionInput,
+            restaurant_id=restaurant_id,
+            start_date=start_date,
+            end_date=end_date,
+            ingredient_id=ingredient_id,
+        )
+        return await _run(inventory.ingredient_consumption, inp)
+
+    @server.tool(annotations=READ_ONLY)
+    async def dish_margins(
+        restaurant_id: RestaurantId,
+        start_date: date,
+        end_date: date,
+        category: str | None = None,
+        order_by: Literal["contribution", "margin_pct"] = "contribution",
+    ) -> DishMarginsResult:
+        """Per dish: price, recipe cost at the period's purchase costs, margin (R$ and %), units
+        sold and total contribution. order_by=margin_pct lists the lowest margins first."""
+        inp = _validate(
+            DishMarginsInput,
+            restaurant_id=restaurant_id,
+            start_date=start_date,
+            end_date=end_date,
+            category=category,
+            order_by=order_by,
+        )
+        return await _run(inventory.dish_margins, inp)
+
+    @server.tool(annotations=READ_ONLY)
+    async def cmv(
+        restaurant_id: RestaurantId,
+        start_date: date,
+        end_date: date,
+        group_by: Literal["none", "category"] = "none",
+    ) -> CmvResult:
+        """CMV (cost of goods sold / revenue) over the period, from recipes x items sold at the
+        period's purchase costs; optionally per menu category."""
+        inp = _validate(
+            CmvInput,
+            restaurant_id=restaurant_id,
+            start_date=start_date,
+            end_date=end_date,
+            group_by=group_by,
+        )
+        return await _run(inventory.cmv, inp)
+
+    @server.tool(annotations=READ_ONLY)
+    async def waste_report(
+        restaurant_id: RestaurantId, start_date: date | None = None, end_date: date | None = None
+    ) -> WasteReportResult:
+        """Physical counts vs the books per ingredient: loss in quantity, share and R$.
+        Largest loss in R$ first. Dates are optional and filter the counts."""
+        inp = _validate(
+            WasteReportInput, restaurant_id=restaurant_id, start_date=start_date, end_date=end_date
+        )
+        return await _run(inventory.waste_report, inp)
+
+    @server.tool(annotations=READ_ONLY)
+    async def cost_changes(
+        restaurant_id: RestaurantId, recent_days: RecentDays = 30
+    ) -> CostChangesResult:
+        """Mean purchase cost per ingredient in the last recent_days vs the same span before
+        it. Largest increase first. Use for "what got more expensive?"."""
+        inp = _validate(CostChangesInput, restaurant_id=restaurant_id, recent_days=recent_days)
+        return await _run(inventory.cost_changes, inp)
+
+    @server.tool(annotations=PROPOSE)
+    async def propose_purchase(
+        restaurant_id: RestaurantId, ingredient_id: IngredientId, qty: PurchaseQty, reason: Reason
+    ) -> PendingActionCreated:
+        """PROPOSE buying an ingredient. Does NOT buy anything: creates a pending purchase that
+        the owner approves outside this tool. Use only when the owner asks to buy or restock."""
+        inp = _validate(
+            ProposePurchaseInput,
+            restaurant_id=restaurant_id,
+            ingredient_id=ingredient_id,
+            qty=qty,
+            reason=reason,
+        )
+        run_id = audit.current_run_id.get()
+        return await _run(functools.partial(pending.propose_purchase, run_id=run_id), inp)
 
 
 def main() -> None:

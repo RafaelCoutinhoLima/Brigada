@@ -139,7 +139,7 @@ async def test_runs_show_each_step_and_hide_error_details(client: TestClient) ->
         resp = client.get("/console/runs?restaurant_id=1&limit=30")
         assert resp.status_code == 200
         state = resp.json()
-        assert {a["name"] for a in state["agents"]} == {"sales", "menu", "operations"}
+        assert {a["name"] for a in state["agents"]} == {"sales", "menu", "operations", "inventory"}
         runs = {r["id"]: r for r in state["runs"]}
 
         good = runs[ok]

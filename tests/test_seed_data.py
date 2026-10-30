@@ -275,9 +275,9 @@ def test_saturday_night_helper() -> None:
 
 
 def test_injection_reviews(ds: Dataset) -> None:
-    assert len(INJECTION_TEXTS) == 3
+    assert len(INJECTION_TEXTS) == 4
     malicious = [r for r in ds.reviews if r.text in INJECTION_TEXTS]
-    assert len(malicious) == 3
+    assert len(malicious) == 4
     assert {r.text for r in malicious} == set(INJECTION_TEXTS)
     week_start = datetime.combine(END_DATE - timedelta(days=6), time.min, TZ)
     _, end = period_bounds(END_DATE)
@@ -326,6 +326,15 @@ def test_load_into_database(ds: Dataset) -> None:
         "order_items": len(ds.order_items),
         "deliveries": len(ds.deliveries),
         "reviews": len(ds.reviews),
+    }
+    from scripts.seed_inventory import generate_inventory
+
+    inv = generate_inventory(ds)
+    expected |= {
+        "ingredients": len(inv.ingredients),
+        "recipes": len(inv.recipes),
+        "stock_movements": len(inv.movements),
+        "stock_counts": len(inv.counts),
     }
     assert written == expected
     with psycopg.connect(url) as conn, conn.cursor() as cur:

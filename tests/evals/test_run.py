@@ -35,7 +35,7 @@ from evals.world import TODAY
 async def test_oracle_scores_100_percent() -> None:
     report = await evaluate("evals.oracle:answer")
     s = report.summary
-    assert s.n == 50
+    assert s.n == 62
     assert s.accuracy == 1.0, [c.id for c in report.cases if not c.passed]
     assert s.errors == 0
     assert s.tool_precision == 1.0 and s.tool_recall == 1.0
@@ -183,7 +183,7 @@ def test_main_writes_results_and_gates(tmp_path: Path, ci_report: RunReport) -> 
     written = RunReport.model_validate_json(out.read_text(encoding="utf-8"))
     assert written.summary.accuracy == 1.0
     assert written.meta.world == {"seed": 42, "end_date": "2026-10-27", "today": "2026-10-28"}
-    assert len(written.meta.case_ids) == 15
+    assert len(written.meta.case_ids) == 16
 
     baseline = tmp_path / "baseline.json"
     baseline.write_text(out.read_text(encoding="utf-8"), encoding="utf-8")

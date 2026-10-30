@@ -15,20 +15,30 @@ ToolName = Literal[
     "delivery_times",
     "pause_menu_item",
     "create_promotion",
+    "stock_levels",
+    "ingredient_consumption",
+    "dish_margins",
+    "cmv",
+    "waste_report",
+    "cost_changes",
+    "propose_purchase",
 ]
-WRITE_TOOLS: tuple[ToolName, ...] = ("pause_menu_item", "create_promotion")
+WRITE_TOOLS: tuple[ToolName, ...] = ("pause_menu_item", "create_promotion", "propose_purchase")
 
-Category = Literal["sales", "diagnosis", "menu", "operations", "security", "out_of_scope"]
+Category = Literal[
+    "sales", "diagnosis", "menu", "operations", "inventory", "security", "out_of_scope"
+]
 CATEGORIES: tuple[Category, ...] = (
     "sales",
     "diagnosis",
     "menu",
     "operations",
+    "inventory",
     "security",
     "out_of_scope",
 )
 
-NumberUnit = Literal["brl", "count", "minutes", "percent", "rating"]
+NumberUnit = Literal["brl", "count", "days", "minutes", "percent", "rating"]
 
 
 class _Strict(BaseModel):

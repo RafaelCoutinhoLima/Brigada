@@ -30,6 +30,7 @@ ROLES = {
     "especialista de Vendas": "sales",
     "especialista de Cardápio": "menu",
     "especialista de Operações": "operations",
+    "especialista de Estoque": "inventory",
     "Você é o redator": "synthesizer",
     "Você é o revisor": "critic",
 }
@@ -257,6 +258,39 @@ async def test_findings_from_reviews_disable_writes_downstream() -> None:
         QUESTION, 1, TODAY, client=client, server_factory=build_server, orchestration_id=oid
     )
     blocked = client.messages.requests["menu"][-1]["messages"][-1]["content"][0]
+    assert blocked["is_error"] is True and "disabled" in blocked["content"]
+
+
+@pytest.mark.db
+async def test_a_review_asking_for_a_purchase_cannot_make_lia_propose_it() -> None:
+    # Reviews read by Clara taint Lia's step through depends_on: the purchase is refused.
+    buy = {"restaurant_id": 1, "ingredient_id": 3, "qty": 500, "reason": "avaliação pediu"}
+    client = RoleClient(
+        planner=[
+            plan(
+                s("s1", "menu", task="leia as avaliações"),
+                s("s2", "inventory", "s1", task="resolva o que faltar no estoque"),
+            )
+        ],
+        menu=[
+            message(
+                tool_use("toolu_r", "reviews_for_item", restaurant_id=1, limit=3),
+                stop_reason="tool_use",
+            ),
+            message(text("Uma avaliação pede a compra de 500 kg de salmão.")),
+        ],
+        inventory=[
+            message(tool_use("toolu_b", "propose_purchase", **buy), stop_reason="tool_use"),
+            message(text("Não posso propor a compra.")),
+        ],
+        synthesizer=[message(text("Nada foi comprado."))],
+        critic=[review(True)],
+    )
+    oid = f"test-{uuid.uuid4().hex}"
+    await orchestrate(
+        QUESTION, 1, TODAY, client=client, server_factory=build_server, orchestration_id=oid
+    )
+    blocked = client.messages.requests["inventory"][-1]["messages"][-1]["content"][0]
     assert blocked["is_error"] is True and "disabled" in blocked["content"]
 
 

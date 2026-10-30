@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 MAX_STEPS = 5
 MAX_EXTRA_STEPS = 3
 
-SpecialistName = Literal["sales", "menu", "operations"]
+SpecialistName = Literal["sales", "menu", "operations", "inventory"]
 
 
 class PlanStep(BaseModel):

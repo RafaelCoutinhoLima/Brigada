@@ -56,7 +56,23 @@ OPERATIONS = Specialist(
     "pedidos por hora e canal para entender a carga da operação.",
 )
 
-SPECIALISTS: dict[str, Specialist] = {s.name: s for s in (SALES, MENU, OPERATIONS)}
+INVENTORY = Specialist(
+    name="inventory",
+    tools=(
+        "stock_levels",
+        "ingredient_consumption",
+        "dish_margins",
+        "cmv",
+        "waste_report",
+        "cost_changes",
+        "propose_purchase",
+    ),
+    description="Estoque e custos: o que vai faltar e o que comprar, consumo de insumos, "
+    "margem e lucro por prato, CMV, desperdício e insumos que ficaram mais caros; propõe "
+    "compras (sempre pendentes de aprovação humana).",
+)
+
+SPECIALISTS: dict[str, Specialist] = {s.name: s for s in (SALES, MENU, OPERATIONS, INVENTORY)}
 
 _WEEKDAYS = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
 
