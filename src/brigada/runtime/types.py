@@ -57,6 +57,21 @@ class MaxStepsExceeded(AgentError):
         self.max_steps = max_steps
 
 
+class NoStructuredAnswer(MaxStepsExceeded):
+    """A structured role spent its budget answering in prose instead of calling its terminal
+    tool. A ``MaxStepsExceeded`` (resumable with a fresh budget); ``text`` keeps the last
+    prose for whoever debugs it."""
+
+    def __init__(self, max_steps: int, tools: frozenset[str], text: str) -> None:
+        AgentError.__init__(
+            self,
+            f"agent answered in prose instead of calling {', '.join(sorted(tools))} "
+            f"within {max_steps} model calls",
+        )
+        self.max_steps = max_steps
+        self.text = text
+
+
 class ModelRefused(AgentError):
     def __init__(self, category: str | None, explanation: str | None) -> None:
         super().__init__(f"model refused (category={category}): {explanation}")

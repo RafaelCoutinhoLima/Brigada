@@ -21,6 +21,7 @@ from brigada.runtime.tools import ToolExecutor, run_tools
 from brigada.runtime.types import (
     MaxStepsExceeded,
     ModelRefused,
+    NoStructuredAnswer,
     ResponseTruncated,
     RunResult,
     ToolCall,
@@ -143,6 +144,10 @@ class Agent:
             if (final := await self._run_tools(messages, result)) is not None:
                 result.text = final
                 return result
+        elif messages[-1]["role"] == "assistant" and self.config.terminal_tools:
+            # A structured role stopped on prose (step limit, or a crash before the reminder
+            # was saved): that is not an answer, so the reminder goes in and the run continues.
+            messages.append({"role": "user", "content": self._terminal_reminder()})
         elif messages[-1]["role"] == "assistant":
             # The model already answered; calling it again would send an assistant-last
             # conversation (a prefill), which current models reject.
@@ -154,6 +159,12 @@ class Agent:
                     # With tool_choice "auto" the model may answer in prose instead of calling
                     # the terminal tool. Prose is not the structured answer: ask again, inside
                     # the same step budget (append-only, so the cached prefix survives).
+                    prose = "".join(b.text for b in response.content if b.type == "text")
+                    if result.steps >= limit:
+                        result.text = prose
+                        raise NoStructuredAnswer(
+                            self.config.max_steps, self.config.terminal_tools, prose
+                        )
                     messages.append({"role": "user", "content": self._terminal_reminder()})
                 case "end_turn" | "stop_sequence":
                     result.text = "".join(b.text for b in response.content if b.type == "text")
@@ -201,7 +212,13 @@ class Agent:
             cost = record_usage(span, cfg.model, response.usage)
             span.set_attribute("brigada.stop_reason", str(response.stop_reason))
         result.steps = step
-        result.tokens_in += response.usage.input_tokens
+        # With caching, input_tokens only counts the uncached part; the prompt is all three.
+        usage = response.usage
+        result.tokens_in += (
+            usage.input_tokens
+            + (usage.cache_read_input_tokens or 0)
+            + (usage.cache_creation_input_tokens or 0)
+        )
         result.tokens_out += response.usage.output_tokens
         result.cost_usd += cost
         # The full content goes back, not just the text: tool_use blocks (and thinking blocks on

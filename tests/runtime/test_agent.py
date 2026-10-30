@@ -14,6 +14,7 @@ from brigada.runtime.tools import ToolExecutionError
 from brigada.runtime.types import (
     MaxStepsExceeded,
     ModelRefused,
+    NoStructuredAnswer,
     ResponseTruncated,
     RunResult,
     ToolCall,
@@ -90,9 +91,21 @@ async def test_prose_instead_of_the_terminal_tool_gets_a_reminder() -> None:
 
 
 async def test_a_model_that_never_calls_the_terminal_tool_fails_closed() -> None:
-    client = FakeClient(*(message(text("texto")) for _ in range(2)))
-    with pytest.raises(MaxStepsExceeded):
+    client = FakeClient(message(text("primeiro")), message(text("último")))
+    with pytest.raises(NoStructuredAnswer) as info:
         await agent(client, terminal_tools=frozenset({"sales_by_period"}), max_steps=2).run("x")
+    # Still a step-limit failure (resumable), and the prose is kept for debugging.
+    assert isinstance(info.value, MaxStepsExceeded) and info.value.text == "último"
+    assert info.value.partial.text == "último"  # type: ignore[attr-defined]
+    assert len(client.messages.requests) == 2
+
+
+async def test_cached_tokens_count_as_prompt_tokens() -> None:
+    reply = message(text("Olá!"), input_tokens=10)
+    reply.usage.cache_read_input_tokens = 900
+    reply.usage.cache_creation_input_tokens = 90
+    result = await agent(FakeClient(reply)).run("oi")
+    assert result.tokens_in == 1000
 
 
 async def test_tool_round_trip_builds_the_right_conversation() -> None:
