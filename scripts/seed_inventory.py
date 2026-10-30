@@ -426,17 +426,16 @@ def stock_on_hand(inv: Inventory) -> dict[int, Decimal]:
 
 
 def average_cost(inv: Inventory, ingredient_id: int, start: date, end: date) -> Decimal:
-    buys = [
-        m
-        for m in inv.movements
-        if m.ingredient_id == ingredient_id
-        and m.kind == "purchase"
-        and start <= m.at.astimezone(TZ).date() <= end
-    ]
-    qty = sum((m.qty for m in buys), Decimal(0))
-    if not qty:
-        raise ValueError(f"no purchases of ingredient {ingredient_id} in {start}..{end}")
-    return sum((m.qty * (m.unit_cost or 0) for m in buys), Decimal(0)) / qty
+    """Mean purchase cost in start..end, else the last purchase before end (as the tools do)."""
+    buys = [m for m in inv.movements if m.ingredient_id == ingredient_id and m.kind == "purchase"]
+    window = [m for m in buys if start <= m.at.astimezone(TZ).date() <= end]
+    qty = sum((m.qty for m in window), Decimal(0))
+    if qty:
+        return sum((m.qty * (m.unit_cost or 0) for m in window), Decimal(0)) / qty
+    before = [m for m in buys if m.at.astimezone(TZ).date() <= end]
+    if not before:
+        raise ValueError(f"no purchases of ingredient {ingredient_id} up to {end}")
+    return max(before, key=lambda m: m.at).unit_cost or Decimal(0)
 
 
 def dish_cost(inv: Inventory, menu_item_id: int, start: date, end: date) -> Decimal:

@@ -35,7 +35,7 @@ def results_file(tmp_path: Path) -> Path:
 
 def test_render_table(results_file: Path) -> None:
     table = render_table(json.loads(results_file.read_text(encoding="utf-8")))
-    assert "| Eval accuracy | 100.0% (15/15, subset: ci) |" in table
+    assert "| Eval accuracy | 100.0% (16/16, subset: ci) |" in table
     assert "| Router savings vs always-strong | – |" in table
 
 
@@ -59,7 +59,7 @@ def test_main_rewrites_readme(tmp_path: Path, results_file: Path) -> None:
     readme.write_text(README, encoding="utf-8")
     assert main([str(results_file), "--readme", str(readme)]) == 0
     text = readme.read_text(encoding="utf-8")
-    assert "100.0% (15/15, subset: ci)" in text
+    assert "100.0% (16/16, subset: ci)" in text
     assert text.startswith("# Title") and text.endswith("untouched\n")
 
 

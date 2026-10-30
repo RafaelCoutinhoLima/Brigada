@@ -24,8 +24,8 @@ def test_cases_file_in_sync_with_builder() -> None:
     )
 
 
-def test_exactly_50_cases(cases: list[Case]) -> None:
-    assert len(cases) == 50
+def test_exactly_61_cases(cases: list[Case]) -> None:
+    assert len(cases) == 61
 
 
 def test_ids_and_questions_unique(cases: list[Case]) -> None:
@@ -42,9 +42,9 @@ def test_all_restaurants_and_categories_covered(cases: list[Case]) -> None:
     assert {c.category for c in cases} == set(CATEGORIES)
 
 
-def test_ci_subset_has_15_covering_all_categories() -> None:
+def test_ci_subset_has_16_covering_all_categories() -> None:
     ci = load_cases(subset="ci")
-    assert len(ci) == 15
+    assert len(ci) == 16
     assert {c.category for c in ci} == set(CATEGORIES)
 
 
