@@ -445,13 +445,18 @@ class WasteLine(_Output):
     counted: float
     loss: float = Field(description="expected - counted.")
     loss_share: float = Field(description="loss / expected, 0..1.")
-    loss_value: float = Field(description="loss x mean purchase cost, in R$.")
+    loss_value: float | None = Field(
+        description="loss x the period's mean purchase cost, in R$. null: no purchase price."
+    )
 
 
 class WasteReportResult(_Output):
     restaurant_id: int
     items: list[WasteLine] = Field(description="Largest loss in R$ first.")
-    total_loss_value: float
+    total_loss_value: float = Field(description="Sum of the lines that have a value.")
+    uncosted: list[str] = Field(
+        description="Ingredients with a loss but no purchase price: not in the total."
+    )
 
 
 class CostChangesInput(_Input):

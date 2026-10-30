@@ -14,6 +14,7 @@ from evals.cases import load_cases
 from evals.schema import (
     AnswerResult,
     Case,
+    ContainsAllExpected,
     ContainsAnyExpected,
     EntityExpected,
     NoToolCalledExpected,
@@ -52,6 +53,8 @@ def ground_truth_text(case: Case) -> str:
             return f"A resposta é {_format_number(exp)}."
         case ContainsAnyExpected():
             return f"Resposta: {exp.values[0]}."
+        case ContainsAllExpected():
+            return "Resposta: " + "; ".join(g[0] for g in exp.groups) + "."
         case EntityExpected():
             return f"É o item {exp.value}."
         case NoToolCalledExpected():

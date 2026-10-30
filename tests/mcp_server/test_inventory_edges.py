@@ -13,6 +13,7 @@ from brigada.mcp_server.models import (
     CostChangesInput,
     DishMarginsInput,
     StockLevelsInput,
+    WasteReportInput,
 )
 
 from .conftest import END_DATE, menu_item_id
@@ -100,3 +101,43 @@ def test_stock_without_sales_still_has_a_reference_date(scratch: Conn) -> None:
     scratch.execute("DELETE FROM stock_movements WHERE restaurant_id = 2 AND kind = 'sale'")
     out = inventory.stock_levels(scratch, StockLevelsInput(restaurant_id=2))
     assert out.items and all(i.cover_days is None for i in out.items)
+
+
+def count_new_ingredient(conn: Conn, expected: float, counted: float) -> None:
+    conn.execute(
+        "INSERT INTO stock_counts "
+        "(id, restaurant_id, ingredient_id, counted_qty, expected_qty, at) "
+        "VALUES (%s, 1, %s, %s, %s, %s)",
+        (NEW_ING, NEW_ING, counted, expected, f"{END_DATE - timedelta(days=1)} 22:00-03"),
+    )
+
+
+def buy_new_ingredient(conn: Conn, when: date, unit_cost: float, mid: int) -> None:
+    conn.execute(
+        "INSERT INTO stock_movements (id, restaurant_id, ingredient_id, kind, qty, unit_cost, at) "
+        "VALUES (%s, 1, %s, 'purchase', 10, %s, %s)",
+        (mid, NEW_ING, unit_cost, f"{when} 08:00-03"),
+    )
+
+
+def test_a_loss_without_a_purchase_price_is_unknown_not_free(scratch: Conn) -> None:
+    add_ingredient(scratch)
+    count_new_ingredient(scratch, expected=10, counted=8)
+    out = inventory.waste_report(scratch, WasteReportInput(restaurant_id=1, **LAST30))
+    line = next(i for i in out.items if i.ingredient_id == NEW_ING)
+    assert line.loss == 2 and line.loss_value is None
+    assert out.uncosted == ["Trufa negra"]
+    assert out.total_loss_value == pytest.approx(
+        sum(i.loss_value for i in out.items if i.loss_value is not None)
+    )
+
+
+def test_a_loss_is_valued_at_the_periods_purchase_cost(scratch: Conn) -> None:
+    """A price from a year ago must not dilute the cost of what was lost this month."""
+    add_ingredient(scratch)
+    buy_new_ingredient(scratch, END_DATE - timedelta(days=365), 100, NEW_ING)
+    buy_new_ingredient(scratch, END_DATE - timedelta(days=10), 300, NEW_ING + 1)
+    count_new_ingredient(scratch, expected=10, counted=8)
+    out = inventory.waste_report(scratch, WasteReportInput(restaurant_id=1, **LAST30))
+    line = next(i for i in out.items if i.ingredient_id == NEW_ING)
+    assert line.loss_value == pytest.approx(2 * 300)

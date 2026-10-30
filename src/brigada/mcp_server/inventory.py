@@ -5,7 +5,7 @@ joins on (restaurant_id, id) so nothing can cross restaurants. Costs are the wei
 the purchases in the period (falling back to the last purchase before it when there was none).
 """
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from brigada.mcp_server.db import Conn, local_day_bounds, local_tz
@@ -33,6 +33,8 @@ from brigada.mcp_server.models import (
 from brigada.mcp_server.queries import ensure_restaurant
 
 USE_WINDOW_DAYS = 14
+_OPEN_LO = datetime(1900, 1, 1, tzinfo=UTC)
+_OPEN_HI = datetime(9999, 1, 1, tzinfo=UTC)
 
 # Mean purchase cost per ingredient over [lo, hi), else the last purchase before hi.
 _COST_CTE = """
@@ -279,22 +281,25 @@ def waste_report(conn: Conn, inp: WasteReportInput) -> WasteReportResult:
     ensure_restaurant(conn, inp.restaurant_id)
     lo = local_day_bounds(inp.start_date, inp.start_date)[0] if inp.start_date else None
     hi = local_day_bounds(inp.end_date, inp.end_date)[1] if inp.end_date else None
-    params = {"rid": inp.restaurant_id, "lo": lo, "hi": hi}
+    # The cost is the period's mean purchase price (the same rule as cmv and dish_margins),
+    # not the mean of the whole history; an open bound means "every purchase on that side".
+    params = {
+        "rid": inp.restaurant_id,
+        "lo": lo or _OPEN_LO,
+        "hi": hi or _OPEN_HI,
+        "count_lo": lo,
+        "count_hi": hi,
+    }
     rows = conn.execute(
-        "WITH cost AS (SELECT i.id AS ingredient_id, "
-        "  (SELECT sum(m.qty * m.unit_cost) / sum(m.qty) FROM stock_movements m "
-        "    WHERE m.restaurant_id = i.restaurant_id AND m.ingredient_id = i.id "
-        "      AND m.kind = 'purchase' "
-        "      AND (%(hi)s::timestamptz IS NULL OR m.at < %(hi)s::timestamptz)) AS avg_cost "
-        "  FROM ingredients i WHERE i.restaurant_id = %(rid)s) "
+        f"WITH {_COST_CTE} "
         "SELECT i.id, i.name, i.unit, count(*) AS n, sum(s.expected_qty) AS expected, "
         "       sum(s.counted_qty) AS counted, c.avg_cost "
         "FROM stock_counts s JOIN ingredients i "
         "  ON i.restaurant_id = s.restaurant_id AND i.id = s.ingredient_id "
         "JOIN cost c ON c.ingredient_id = i.id "
         "WHERE s.restaurant_id = %(rid)s "
-        "AND (%(lo)s::timestamptz IS NULL OR s.at >= %(lo)s::timestamptz) "
-        "AND (%(hi)s::timestamptz IS NULL OR s.at < %(hi)s::timestamptz) "
+        "AND (%(count_lo)s::timestamptz IS NULL OR s.at >= %(count_lo)s::timestamptz) "
+        "AND (%(count_hi)s::timestamptz IS NULL OR s.at < %(count_hi)s::timestamptz) "
         "GROUP BY i.id, c.avg_cost",
         params,
     ).fetchall()
@@ -302,6 +307,7 @@ def waste_report(conn: Conn, inp: WasteReportInput) -> WasteReportResult:
     for r in rows:
         expected, counted = float(r["expected"]), float(r["counted"])
         loss = expected - counted
+        cost = r["avg_cost"]
         items.append(
             WasteLine(
                 ingredient_id=r["id"],
@@ -312,14 +318,16 @@ def waste_report(conn: Conn, inp: WasteReportInput) -> WasteReportResult:
                 counted=round(counted, 3),
                 loss=round(loss, 3),
                 loss_share=round(loss / expected, 4) if expected else 0.0,
-                loss_value=round(loss * float(r["avg_cost"] or 0), 2),
+                # No purchase price yet: the value is unknown, never zero.
+                loss_value=round(loss * float(cost), 2) if cost is not None else None,
             )
         )
-    items.sort(key=lambda x: (-x.loss_value, x.ingredient_id))
+    items.sort(key=lambda x: (x.loss_value is None, -(x.loss_value or 0), x.ingredient_id))
     return WasteReportResult(
         restaurant_id=inp.restaurant_id,
         items=items,
-        total_loss_value=round(sum(x.loss_value for x in items), 2),
+        total_loss_value=round(sum(x.loss_value or 0 for x in items), 2),
+        uncosted=sorted(x.name for x in items if x.loss_value is None),
     )
 
 

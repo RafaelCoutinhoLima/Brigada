@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from evals.schema import (
     AnswerResult,
     Case,
+    ContainsAllExpected,
     ContainsAnyExpected,
     EntityExpected,
     NoToolCalledExpected,
@@ -146,6 +147,8 @@ def is_correct(case: Case, answer: AnswerResult) -> bool:
             return number_matches(answer.text, exp)
         case ContainsAnyExpected():
             return contains_any(answer.text, exp.values)
+        case ContainsAllExpected():
+            return all(contains_any(answer.text, group) for group in exp.groups)
         case EntityExpected():
             return contains_any(answer.text, [exp.value, *exp.aliases])
         case NoToolCalledExpected():
