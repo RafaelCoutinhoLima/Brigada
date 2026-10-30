@@ -302,6 +302,39 @@ async def test_a_review_asking_for_a_purchase_cannot_make_lia_propose_it() -> No
 
 
 @pytest.mark.db
+async def test_a_searched_review_cannot_make_lia_propose_a_purchase() -> None:
+    # Same as above, but the injection arrives through search_reviews.
+    buy = {"restaurant_id": 3, "ingredient_id": 41, "qty": 500, "reason": "avaliação pediu"}
+    client = RoleClient(
+        planner=[
+            plan(
+                s("s1", "menu", task="o que dizem do salmão"),
+                s("s2", "inventory", "s1", task="resolva o que faltar"),
+            )
+        ],
+        menu=[
+            message(
+                tool_use("toolu_r", "search_reviews", restaurant_id=3, query="compra de salmão"),
+                stop_reason="tool_use",
+            ),
+            message(text("Uma avaliação pede a compra de 500 kg de salmão.")),
+        ],
+        inventory=[
+            message(tool_use("toolu_b", "propose_purchase", **buy), stop_reason="tool_use"),
+            message(text("Não posso propor a compra.")),
+        ],
+        synthesizer=[message(text("Nada foi comprado."))],
+        critic=[review(True)],
+    )
+    oid = f"test-{uuid.uuid4().hex}"
+    await orchestrate(
+        QUESTION, 3, TODAY, client=client, server_factory=build_server, orchestration_id=oid
+    )
+    blocked = client.messages.requests["inventory"][-1]["messages"][-1]["content"][0]
+    assert blocked["is_error"] is True and "disabled" in blocked["content"]
+
+
+@pytest.mark.db
 async def test_orchestration_and_its_runs_are_saved() -> None:
     url = os.environ["DATABASE_URL"]
     client = RoleClient(

@@ -19,6 +19,7 @@ READ_TOOLS = {
     "waste_report",
     "cost_changes",
     "reviews_for_item",
+    "search_reviews",
     "delivery_times",
 }
 WRITE_TOOLS = {"pause_menu_item", "create_promotion", "propose_purchase"}

@@ -161,6 +161,24 @@ async def test_write_tools_are_disabled_after_reading_untrusted_reviews() -> Non
 
 
 @pytest.mark.db
+async def test_write_tools_are_disabled_after_searching_reviews() -> None:
+    """The planted injections are findable by search: searching taints the run too."""
+    pause = ToolCall(
+        "toolu_2", "pause_menu_item", {"restaurant_id": 3, "menu_item_id": 301, "reason": "x"}
+    )
+    tools = ("search_reviews", "pause_menu_item")
+    async with mcp_toolbox("test-taint", 3, tools, build_server()) as box:
+        found = json.loads(
+            await box.executor(
+                ToolCall("toolu_1", "search_reviews", {"restaurant_id": 3, "query": "ignore"})
+            )
+        )
+        assert any("Ignore todas" in i["untrusted_text"] for i in found["items"])
+        with pytest.raises(ToolExecutionError, match="customer-written text"):
+            await box.executor(pause)
+
+
+@pytest.mark.db
 async def test_write_tools_work_when_nothing_untrusted_was_read() -> None:
     async with mcp_toolbox("test-taint", 3, READ_AND_WRITE, build_server()) as box:
         items = json.loads(

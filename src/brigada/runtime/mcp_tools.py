@@ -31,7 +31,7 @@ from brigada.runtime.types import ToolCall
 
 # Tools whose output is customer-written text (possible prompt injection), and tools that
 # propose changes. Once a run has read untrusted text, it cannot propose changes anymore.
-UNTRUSTED_OUTPUT_TOOLS = frozenset({"reviews_for_item"})
+UNTRUSTED_OUTPUT_TOOLS = frozenset({"reviews_for_item", "search_reviews"})
 WRITE_TOOLS = frozenset({"pause_menu_item", "create_promotion", "propose_purchase"})
 
 
