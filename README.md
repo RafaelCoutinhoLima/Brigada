@@ -93,6 +93,11 @@ uv run python -m brigada.orchestration "Por que minhas vendas caíram na última
 # live console: the orchestrator's plan and review plus one pane per agent, updated every second; dispatch questions from the prompt
 uv run uvicorn brigada.api.main:app   # then open http://localhost:8000/console (needs API_KEYS)
 # http://localhost:8000/console?demo  -> simulated runs, no server data or API cost
+
+# write tools only propose; the owner decides in the console ("Aguardando sua decisão") or over HTTP
+curl -H "X-API-Key: $KEY" "localhost:8000/actions?restaurant_id=1"
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+     -d '{"decided_by": "owner"}' localhost:8000/actions/<id>/approve   # or /reject
 ```
 
 ## Data
