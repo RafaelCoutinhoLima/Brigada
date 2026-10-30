@@ -2,7 +2,7 @@
 
 **A multi-agent platform for restaurant owners, built from scratch: no LangChain, no CrewAI, no agent framework.**
 
-Ask a question like *"Why did my sales drop yesterday?"* or *"What do customers complain about in my menu?"*. A planner agent breaks it into steps, specialist agents query real data through an MCP server, a critic agent reviews the answer, and every step is traced with tokens, latency and cost.
+Ask a question like *"Why did my sales drop yesterday?"*, *"What do customers complain about in my menu?"* or *"What will run out before the next delivery?"*. A planner agent breaks it into steps, specialist agents query real data through an MCP server, a critic agent reviews the answer, and every step is traced with tokens, latency and cost.
 
 > Status: 🚧 in active development. Runtime, MCP server, orchestration and the live console are in; RAG, router and the injection test suite are next.
 
@@ -16,9 +16,9 @@ Frameworks hide the parts that matter in production: the tool-use loop, retries,
                ┌──────────────┐
   question ──► │   Planner    │ ── JSON plan (validated) ──┐
                └──────────────┘                            ▼
-                                       ┌─────────── DAG executor ───────────┐
-                                       │  Sales  │  Menu  │  Operations     │  (parallel when independent)
-                                       └────┬────┴───┬────┴────┬───────────┘
+                                       ┌──────────── DAG executor ─────────────┐
+                                       │ Sales │ Menu │ Operations │ Inventory │  (parallel when independent)
+                                       └───┬───┴──┬───┴─────┬──────┴────┬──────┘
                                             ▼        ▼         ▼
                                     ┌──────────── MCP server ────────────┐
                                     │ read tools │ write tools (human OK)│
@@ -44,7 +44,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 3 | MCP server | Read/write tool separation, human-in-the-loop, audit log |
 | 4 | Hybrid RAG | Keyword + vector search, reranking, recall@k measured |
 | 5 | Model router | Trained classifier choosing cheap vs strong model, accuracy vs cost |
-| 6 | Evals & LLMOps | 50 cases, calibrated LLM-as-judge, versioned prompts, CI gate |
+| 6 | Evals & LLMOps | 62 cases with ground truth from the data generator, LLM-as-judge, versioned prompts, CI gate |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
 
@@ -65,6 +65,8 @@ _Filled in as modules ship._
 
 _Answerer `brigada.orchestration:answer`, all 50 cases, commit `641eace`, 2026-10-29. Models: OpenRouter `:free` (nemotron-3-ultra for specialists and synthesis, nemotron-3.5-lightning for planner and critic). First real run: 60% on the ci subset._
 <!-- results:end -->
+
+Inventory (stock cover, dish margins, CMV, waste, cost changes, purchase proposals that need the owner's approval): 10/11 on the 11 inventory cases on the first live run with `nemotron-3.5-super-vl:free`; the miss (loss share computed over purchases instead of the counted stock) was fixed in the prompt and passes on re-run. Not yet included in the table above.
 
 ## Stack
 
