@@ -1,6 +1,6 @@
 # 0005. Aprovação das ações propostas pela API e pelo console
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-10-30
 
 ## Contexto
@@ -32,11 +32,27 @@ Restrições:
 
 ## Decisão
 
-_Pendente._
+Escolhi a opção 1: rotas na API (`GET /actions`, `POST /actions/{id}/approve|reject`), que
+o console usa para aprovar e rejeitar. A aprovação fica fora do MCP: a IA propõe, mas nunca
+consegue aprovar o que ela mesma propôs.
 
 ## Consequências
 
-_Pendente._
+- **Melhora:**
+  - o dono decide pelo navegador, no mesmo console em que fez a pergunta;
+  - cada chave só enxerga e decide as ações do próprio restaurante;
+  - toda decisão fica auditada.
+- **Ainda é fraco:**
+  - **Quem aprovou.** Hoje o nome é digitado à mão (`decided_by`), e a auditoria guarda
+    junto só um hash da chave. O nome deve vir do usuário logado.
+  - **O que o dono vê.** O quadro mostra só a ação e o motivo em texto. Para decidir bem, ele
+    precisa ver a resposta e a sugestão da IA embasadas nos dados: os números que as
+    ferramentas devolveram, por exemplo cobertura de 2 dias contra prazo de 3, ou 10
+    reclamações de comida fria.
+- **Como sei que deu certo:**
+  - uma ação de outro restaurante responde 404, igual a uma ação que não existe;
+  - aprovar duas vezes ao mesmo tempo aplica a mudança uma vez só;
+  - as duas coisas estão provadas por testes, e cada uma pega a mutação da sua defesa.
 
 Pontos para avaliar:
 - `decided_by` é o nome que a pessoa digita. Como a chave de API não tem dono, a auditoria

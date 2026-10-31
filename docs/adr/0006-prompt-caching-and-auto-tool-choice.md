@@ -1,6 +1,6 @@
 # 0006. Prompt caching e `tool_choice: auto` com ferramenta `strict`
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-10-30
 
 ## Contexto
@@ -37,11 +37,33 @@ Para o cache:
 
 ## Decisão
 
-_Pendente._
+- **Cache:** dois pontos de cache, um no bloco de `system` e um automático que acompanha a
+  conversa. Sem se preocupar com o orçamento, um sistema de agentes pode gastar uma fortuna,
+  porque cada passo reenvia tudo. O objetivo é gastar o mínimo possível sem perder qualidade.
+- **Resposta estruturada:** `tool_choice: auto`, ferramenta `strict` e um lembrete no loop
+  quando o modelo responde em texto. O plano e o veredito precisam vir num formato fixo,
+  porque é código que os lê:
+  - o executor roda os passos do plano em ordem de dependência;
+  - o orquestrador decide pelo veredito se aprova a resposta ou pede uma rodada extra.
+
+  Texto livre teria que ser interpretado, e aí um erro passaria sem ninguém ver.
 
 ## Consequências
 
-_Pendente._
+- **Melhora:**
+  - **Custo.** Num loop de vários passos, o que se repete passa a ser lido do cache, que custa
+    uma fração do preço normal.
+  - **Modelos novos.** O sistema funciona com os modelos 5.5, que recusam a escolha forçada de
+    ferramenta.
+  - **Retomada.** Um papel que insiste em responder em texto termina num erro que pode ser
+    retomado, sem texto solto passando por plano.
+- **Piora:**
+  - Uma resposta em texto custa um passo a mais.
+  - O cache só funciona acima de um tamanho mínimo de prompt, e quando não acontece nada avisa.
+  - No OpenRouter os dois recursos são descartados.
+- **Como sei que deu certo:** o orquestrador rodou ao vivo com o planner e a crítica chamando
+  as ferramentas `strict` no primeiro passo. A economia do cache se confere em
+  `cache_read_input_tokens` no trace, numa execução com a Anthropic.
 
 Pontos para avaliar:
 - Meça `cache_read_input_tokens` numa execução real. Abaixo do mínimo cacheável do modelo, o
