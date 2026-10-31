@@ -1,5 +1,6 @@
 """Attacks found by the red team review, kept as regression tests."""
 
+from collections.abc import Iterator
 from typing import Any
 
 import psycopg
@@ -10,6 +11,7 @@ from brigada.mcp_server import audit
 from brigada.mcp_server import server as server_module
 from brigada.mcp_server.db import Conn
 from brigada.mcp_server.server import BrigadaMCPServer
+from tests.audit_cleanup import purge_audit
 
 from .conftest import audit_rows, scoped_call
 
@@ -176,3 +178,132 @@ def test_every_read_tool_is_declared_read_only() -> None:
     for tool in build_server()._tool_manager.list_tools():
         read_only = tool.annotations is not None and tool.annotations.read_only_hint is True
         assert read_only == (tool.name not in WRITE_TOOLS), tool.name
+
+
+# R1: the taint is also read back from the audit log, so a client that forgets it (a new
+# toolbox opened with the same run_id) still cannot write after reading customer text.
+
+PAUSE_101 = {"restaurant_id": 1, "menu_item_id": 101, "reason": "pedido do dono"}
+
+
+async def call_with_meta(name: str, args: dict[str, Any], meta: dict[str, Any]) -> Any:
+    from mcp import Client
+
+    from brigada.mcp_server.server import build_server
+
+    async with Client(build_server()) as client:
+        return await client.call_tool(name, args, meta=meta)
+
+
+def untainted_meta(run_id: str) -> dict[str, Any]:
+    return {audit.RUN_ID_META_KEY: run_id, audit.RESTAURANT_ID_META_KEY: 1}
+
+
+@pytest.mark.parametrize("reader", sorted(audit.UNTRUSTED_OUTPUT_TOOLS))
+async def test_write_after_an_audited_untrusted_read_is_refused_without_taint_meta(
+    db: Conn, run_id: str, reader: str
+) -> None:
+    audit.record(db, tool=reader, args={"restaurant_id": 1}, result={}, run_id=run_id)
+    out = await call_with_meta("pause_menu_item", PAUSE_101, untainted_meta(run_id))
+    assert out.is_error and "customer-written text" in str(out.content)
+    assert pending_for(db, run_id) == []
+    refused = audit_rows(db, run_id)[-1]
+    assert refused["tool"] == "pause_menu_item" and "customer-written text" in refused["error"]
+
+
+async def test_write_without_untrusted_read_still_passes(db: Conn, run_id: str) -> None:
+    # Another standalone run (orchestration_id NULL, like this one) that read reviews must not
+    # taint this one: NULL never links two runs.
+    other = f"{run_id}-other"
+    add_run(db, run_id, None)
+    add_run(db, other, None)
+    audit.record(db, tool="search_reviews", args={"restaurant_id": 1}, result={}, run_id=other)
+    try:
+        await call_with_meta("list_menu_items", {"restaurant_id": 1}, untainted_meta(run_id))
+        out = await call_with_meta("pause_menu_item", PAUSE_101, untainted_meta(run_id))
+    finally:
+        purge_audit(db, "run_id = %s", (other,))
+        db.execute("DELETE FROM runs WHERE id = ANY(%s)", ([run_id, other],))
+    assert not out.is_error, out.content
+    assert len(pending_for(db, run_id)) == 1
+
+
+async def test_write_without_run_id_is_refused(db: Conn) -> None:
+    last_audit = db.execute("SELECT coalesce(max(id), 0) AS m FROM tool_audit").fetchone()["m"]
+    last_action = db.execute("SELECT coalesce(max(id), 0) AS m FROM pending_actions").fetchone()
+    last_action = last_action["m"]
+    try:
+        out = await call_with_meta("pause_menu_item", PAUSE_101, {audit.RESTAURANT_ID_META_KEY: 1})
+        assert out.is_error and "run id" in str(out.content)
+        created = db.execute(
+            "SELECT id FROM pending_actions WHERE id > %s AND run_id IS NULL", (last_action,)
+        ).fetchall()
+        assert created == []
+        [row] = db.execute(
+            "SELECT tool, error FROM tool_audit WHERE id > %s AND run_id IS NULL", (last_audit,)
+        ).fetchall()
+        assert row["tool"] == "pause_menu_item" and "run id" in row["error"]
+    finally:
+        purge_audit(db, "run_id IS NULL AND id > %s", (last_audit,))
+        db.execute("DELETE FROM pending_actions WHERE run_id IS NULL AND id > %s", (last_action,))
+
+
+async def test_database_error_in_the_taint_check_refuses_the_write(
+    db: Conn, run_id: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(run_id: str) -> bool:
+        raise psycopg.OperationalError('connection to server at "10.0.0.5" failed')
+
+    monkeypatch.setattr(server_module, "_read_untrusted_text", broken)
+    out = await call_with_meta("pause_menu_item", PAUSE_101, untainted_meta(run_id))
+    assert out.is_error and "could not check" in str(out.content)
+    assert "10.0.0.5" not in str(out.content)
+    assert pending_for(db, run_id) == []
+
+
+@pytest.fixture
+def orchestration(db: Conn, run_id: str) -> Iterator[str]:
+    """An orchestration holding this test's run; removed (with its runs) afterwards."""
+    oid = f"{run_id}-orch"
+    db.execute(
+        "INSERT INTO orchestrations (id, restaurant_id, question, today) "
+        "VALUES (%s, 1, 'q', '2026-10-27')",
+        (oid,),
+    )
+    add_run(db, run_id, oid)
+    yield oid
+    purge_audit(db, "run_id LIKE %s", (f"{oid}-%",))
+    db.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
+
+
+def add_run(db: Conn, run_id: str, orchestration_id: str | None, *, tainted: bool = False) -> None:
+    db.execute(
+        "INSERT INTO runs (id, agent, restaurant_id, question, today, model, prompt_sha256, "
+        "messages, orchestration_id, tainted) "
+        "VALUES (%s, 'menu', 1, 'q', '2026-10-27', 'm', 'x', '[]', %s, %s)",
+        (run_id, orchestration_id, tainted),
+    )
+
+
+async def test_untrusted_read_by_a_sibling_run_blocks_the_write(
+    db: Conn, run_id: str, orchestration: str
+) -> None:
+    sibling = f"{orchestration}-reviews"
+    add_run(db, sibling, orchestration)
+    audit.record(db, tool="reviews_for_item", args={"restaurant_id": 1}, result={}, run_id=sibling)
+    out = await call_with_meta("pause_menu_item", PAUSE_101, untainted_meta(run_id))
+    assert out.is_error and "customer-written text" in str(out.content)
+    assert pending_for(db, run_id) == []
+
+
+@pytest.mark.parametrize("which", ["self", "sibling"])
+async def test_runs_tainted_blocks_the_write(
+    db: Conn, run_id: str, orchestration: str, which: str
+) -> None:
+    if which == "self":
+        db.execute("UPDATE runs SET tainted = true WHERE id = %s", (run_id,))
+    else:
+        add_run(db, f"{orchestration}-tainted", orchestration, tainted=True)
+    out = await call_with_meta("pause_menu_item", PAUSE_101, untainted_meta(run_id))
+    assert out.is_error and "customer-written text" in str(out.content)
+    assert pending_for(db, run_id) == []

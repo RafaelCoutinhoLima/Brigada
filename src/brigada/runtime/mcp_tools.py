@@ -25,13 +25,13 @@ from brigada.mcp_server.audit import (
     RUN_ID_META_KEY,
     TAINTED_META_KEY,
     TOOL_USE_ID_META_KEY,
+    UNTRUSTED_OUTPUT_TOOLS,
 )
 from brigada.runtime.tools import ToolExecutionError, ToolExecutor
 from brigada.runtime.types import ToolCall
 
-# Tools whose output is customer-written text (possible prompt injection), and tools that
-# propose changes. Once a run has read untrusted text, it cannot propose changes anymore.
-UNTRUSTED_OUTPUT_TOOLS = frozenset({"reviews_for_item", "search_reviews"})
+# Tools that propose changes. Once a run has read untrusted text (UNTRUSTED_OUTPUT_TOOLS,
+# defined next to the audit log so the server can use it too), it cannot propose changes.
 WRITE_TOOLS = frozenset({"pause_menu_item", "create_promotion", "propose_purchase"})
 
 

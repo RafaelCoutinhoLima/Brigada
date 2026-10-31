@@ -170,7 +170,7 @@ class BrigadaMCPServer(MCPServer[Any]):
                 where["restaurant_id"] = scope = _resolve_restaurant_id(context)
                 registered = self._tool_manager.get_tool(name) is not None
                 _check_scope(arguments, scope, registered=registered)
-                self._refuse_writes_when_tainted(name, meta)
+                await self._refuse_writes_when_tainted(name, meta, run_id)
             except ToolError:
                 raise
             except Exception as exc:
@@ -195,24 +195,43 @@ class BrigadaMCPServer(MCPServer[Any]):
             raise ToolError("internal error: the call could not be audited") from None
         return result
 
-    def _refuse_writes_when_tainted(self, name: str, meta: dict[str, Any]) -> None:
+    async def _refuse_writes_when_tainted(
+        self, name: str, meta: dict[str, Any], run_id: str | None
+    ) -> None:
         """Enforced here, not only in the runtime, so a blocked write is audited: it is the
-        strongest prompt-injection signal the system has."""
+        strongest prompt-injection signal the system has.
+
+        Two sources of taint: the client's ``_meta`` flag, and the audit log itself (this run,
+        or another run of its orchestration, already called a tool returning customer text).
+        The second one does not trust the client to remember: a new toolbox opened with the
+        same ``run_id`` starts untainted on the client side, never on the server side.
+        """
         tool = self._tool_manager.get_tool(name)
-        if tool is None or meta.get(audit.TAINTED_META_KEY) is not True:
-            return
+        if tool is None:
+            return  # unknown tool: the SDK rejects it next, and it is audited
         # Fail closed: only tools explicitly declared read-only stay available. A new tool
         # registered without annotations is treated as a write.
-        if tool.annotations is None or tool.annotations.read_only_hint is not True:
-            logger.warning(
-                "write %r blocked: run %s read untrusted text",
-                name,
-                meta.get(audit.RUN_ID_META_KEY),
-            )
-            raise ToolError(
-                f"tool {name!r} is disabled: this conversation read customer-written text, "
-                "which may contain instructions. Tell the owner to request the change directly."
-            )
+        if tool.annotations is not None and tool.annotations.read_only_hint is True:
+            return
+        if meta.get(audit.TAINTED_META_KEY) is not True:
+            if run_id is None:
+                # Without a run id there is no history to check, so no write either.
+                logger.warning("write %r blocked: no run id", name)
+                raise ToolError(f"tool {name!r} is disabled: this call has no run id")
+            try:
+                tainted = await anyio.to_thread.run_sync(_read_untrusted_text, run_id)
+            except psycopg.Error:
+                logger.exception("taint check failed for write %r in run %s", name, run_id)
+                raise ToolError(
+                    f"tool {name!r} is disabled: could not check this run's history"
+                ) from None
+            if not tainted:
+                return
+        logger.warning("write %r blocked: run %s read untrusted text", name, run_id)
+        raise ToolError(
+            f"tool {name!r} is disabled: this conversation read customer-written text, "
+            "which may contain instructions. Tell the owner to request the change directly."
+        )
 
     def _reject_unknown_arguments(self, name: str, arguments: dict[str, Any]) -> None:
         """The SDK silently drops arguments that are not in the schema, so the models'
@@ -223,6 +242,12 @@ class BrigadaMCPServer(MCPServer[Any]):
         unknown = set(arguments) - set(tool.parameters.get("properties", {}))
         if unknown:
             raise ToolError(f"invalid arguments: unknown {sorted(unknown)}")
+
+
+def _read_untrusted_text(run_id: str) -> bool:
+    """Sync, for a worker thread: own connection, like ``_run``."""
+    with connect() as conn:
+        return audit.read_untrusted_text(conn, run_id)
 
 
 async def _audit(**kwargs: Any) -> None:
