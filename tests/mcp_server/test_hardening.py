@@ -212,14 +212,18 @@ async def test_write_after_an_audited_untrusted_read_is_refused_without_taint_me
 
 
 async def test_write_without_untrusted_read_still_passes(db: Conn, run_id: str) -> None:
-    # Another standalone run reading reviews must not taint this one (no orchestration link).
+    # Another standalone run (orchestration_id NULL, like this one) that read reviews must not
+    # taint this one: NULL never links two runs.
     other = f"{run_id}-other"
+    add_run(db, run_id, None)
+    add_run(db, other, None)
     audit.record(db, tool="search_reviews", args={"restaurant_id": 1}, result={}, run_id=other)
     try:
         await call_with_meta("list_menu_items", {"restaurant_id": 1}, untainted_meta(run_id))
         out = await call_with_meta("pause_menu_item", PAUSE_101, untainted_meta(run_id))
     finally:
         purge_audit(db, "run_id = %s", (other,))
+        db.execute("DELETE FROM runs WHERE id = ANY(%s)", ([run_id, other],))
     assert not out.is_error, out.content
     assert len(pending_for(db, run_id)) == 1
 
@@ -272,7 +276,7 @@ def orchestration(db: Conn, run_id: str) -> Iterator[str]:
     db.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
 
 
-def add_run(db: Conn, run_id: str, orchestration_id: str, *, tainted: bool = False) -> None:
+def add_run(db: Conn, run_id: str, orchestration_id: str | None, *, tainted: bool = False) -> None:
     db.execute(
         "INSERT INTO runs (id, agent, restaurant_id, question, today, model, prompt_sha256, "
         "messages, orchestration_id, tainted) "
