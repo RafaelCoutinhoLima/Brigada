@@ -27,6 +27,9 @@ RESTAURANT_ID_META_KEY = "brigada/restaurant_id"
 TOOL_USE_ID_META_KEY = "brigada/tool_use_id"
 # Set by the runtime once a run has read customer-written text: write tools then refuse.
 TAINTED_META_KEY = "brigada/tainted"
+# Tools whose output is customer-written text (possible prompt injection). Shared by the
+# runtime (taint in the client) and the server (taint read back from this audit log).
+UNTRUSTED_OUTPUT_TOOLS = frozenset({"reviews_for_item", "search_reviews"})
 
 current_run_id: ContextVar[str | None] = ContextVar("brigada_run_id", default=None)
 current_restaurant_id: ContextVar[int | None] = ContextVar("brigada_restaurant_id", default=None)
