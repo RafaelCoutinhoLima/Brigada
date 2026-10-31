@@ -117,6 +117,27 @@ def _strip_nul(value: Any) -> Any:
     return value
 
 
+def read_untrusted_text(conn: Conn, run_id: str) -> bool:
+    """True if ``run_id``, or any run of the same orchestration, read customer-written text.
+
+    "Read" means an audited call to an ``UNTRUSTED_OUTPUT_TOOLS`` tool, failed calls included
+    (a failed read may still carry text), or a run stored with ``runs.tainted``. Siblings are
+    matched with plain ``=``: runs without an orchestration (NULL) are never siblings.
+    """
+    row = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM runs WHERE id = %(rid)s AND tainted)"
+        " OR EXISTS (SELECT 1 FROM tool_audit WHERE run_id = %(rid)s AND tool = ANY(%(tools)s))"
+        " OR EXISTS ("
+        "   SELECT 1 FROM runs me JOIN runs sib ON sib.orchestration_id = me.orchestration_id"
+        "   WHERE me.id = %(rid)s AND (sib.tainted OR EXISTS ("
+        "     SELECT 1 FROM tool_audit a WHERE a.run_id = sib.id AND a.tool = ANY(%(tools)s)))"
+        " ) AS untrusted",
+        {"rid": run_id, "tools": sorted(UNTRUSTED_OUTPUT_TOOLS)},
+    ).fetchone()
+    assert row is not None
+    return bool(row["untrusted"])
+
+
 def record_standalone(**kwargs: Any) -> int:
     """Same as ``record`` on a fresh connection, committed immediately.
 
