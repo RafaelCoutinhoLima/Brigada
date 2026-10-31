@@ -97,19 +97,26 @@ def record(
 
 
 def storable(value: Any) -> Any:
-    """JSON-safe copy that Postgres accepts: NUL (U+0000) becomes a visible ``\\u0000`` and
-    anything not JSON-serializable becomes its ``str``."""
+    """JSON-safe copy that Postgres accepts: NUL (U+0000) becomes a visible ``\\u0000``, a lone
+    surrogate a visible ``\\udXXX``, and anything not JSON-serializable becomes its ``str``."""
     if value is None:
         return None
     if isinstance(value, str):
-        return value.replace("\x00", "\\u0000")
+        return _safe_text(value)
     plain = json.loads(json.dumps(value, default=str))
     return _strip_nul(plain)
 
 
+def _safe_text(text: str) -> str:
+    # A lone surrogate is not valid UTF-8 and the JSON round trip keeps it as is: Postgres
+    # rejects it in text and in jsonb, so the audit row would fail.
+    escaped = text.encode("utf-8", "backslashreplace").decode("utf-8")
+    return escaped.replace("\x00", "\\u0000")
+
+
 def _strip_nul(value: Any) -> Any:
     if isinstance(value, str):
-        return value.replace("\x00", "\\u0000")
+        return _safe_text(value)
     if isinstance(value, dict):
         return {_strip_nul(k): _strip_nul(v) for k, v in value.items()}
     if isinstance(value, list):

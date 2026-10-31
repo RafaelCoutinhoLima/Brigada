@@ -49,9 +49,30 @@ async def test_nul_in_tool_name_is_audited(server: BrigadaMCPServer, db: Conn, r
     assert row["tool"] == "evil\\u0000tool"
 
 
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("evil\ud800tool", {"restaurant_id": 1}),  # lone surrogate in the tool name
+        ("list_menu_items", {"restaurant_id": 1, "x": "\udfff"}),  # in an argument
+        ("list_menu_items", {"restaurant_id": 1, "k\ud800": 1}),  # in a key
+    ],
+)
+async def test_lone_surrogates_are_rejected_and_still_audited(
+    server: BrigadaMCPServer, db: Conn, run_id: str, name: str, args: dict[str, Any]
+) -> None:
+    with pytest.raises(ToolError, match="invalid unicode"):
+        await scoped_call(server, name, args)
+    [row] = audit_rows(db, run_id)  # Postgres cannot store a surrogate: it is escaped
+    assert "invalid unicode" in str(row["error"])
+    assert "\\ud800" in f"{row['tool']}{row['args']}" or "\\udfff" in str(row["args"])
+
+
 def test_storable_makes_anything_insertable() -> None:
     assert audit.storable({"a\x00": ["\x00", 1, None]}) == {"a\\u0000": ["\\u0000", 1, None]}
     assert audit.storable(object()) is not None  # falls back to str, never raises
+    assert audit.storable("a\ud800b") == "a\\ud800b"
+    assert audit.storable({"k\udfff": ["\ud800"]}) == {"k\\udfff": ["\\ud800"]}
+    assert audit.storable("ação 😀") == "ação 😀"  # valid text is untouched
 
 
 async def test_database_errors_do_not_reach_the_model(
