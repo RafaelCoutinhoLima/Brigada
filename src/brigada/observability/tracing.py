@@ -58,6 +58,8 @@ ATTR_ERROR_TYPE = "error.type"
 ATTR_AGENT = "brigada.agent"
 ATTR_STEP_KIND = "brigada.step.kind"
 ATTR_COST_USD = "brigada.cost_usd"
+ATTR_RUN_ID = "brigada.run_id"
+ATTR_RESTAURANT_ID = "brigada.restaurant_id"
 
 _configured_provider: TracerProvider | None = None
 

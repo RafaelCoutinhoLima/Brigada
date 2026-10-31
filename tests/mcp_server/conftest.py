@@ -12,11 +12,13 @@ from typing import Any
 
 import pytest
 from mcp_types import CallToolResult, InputRequiredResult
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from brigada.mcp_server.audit import restaurant_context, run_context
 from brigada.mcp_server.db import Conn, connect
 from brigada.mcp_server.server import BrigadaMCPServer, build_server
 from tests.audit_cleanup import purge_audit
+from tests.otel_memory import memory_exporter
 
 END_DATE = date(2026, 10, 27)
 START_DATE = date(2026, 7, 30)  # 90-day seed period, inclusive
@@ -25,6 +27,14 @@ START_DATE = date(2026, 7, 30)  # 90-day seed period, inclusive
 @pytest.fixture
 def server() -> BrigadaMCPServer:
     return build_server()
+
+
+@pytest.fixture
+def spans() -> Iterator[InMemorySpanExporter]:
+    exporter = memory_exporter()
+    exporter.clear()
+    yield exporter
+    exporter.clear()
 
 
 @pytest.fixture
