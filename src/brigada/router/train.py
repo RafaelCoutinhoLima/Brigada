@@ -37,6 +37,8 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import FeatureUnion, Pipeline
 
+from brigada.observability.cost import get_pricing
+
 DEFAULT_LABELS = Path("evals/router_labels.jsonl")
 DEFAULT_MODEL = Path("models/router.joblib")
 DEFAULT_METRICS = Path("evals/router_metrics.json")
@@ -54,11 +56,19 @@ class Price:
     def cost(self, tokens_in: int, tokens_out: int) -> float:
         return (tokens_in * self.input_per_mtok + tokens_out * self.output_per_mtok) / 1e6
 
+    @classmethod
+    def of(cls, model: str) -> Price:
+        """Standard-tier input/output price from the project's verified price table. No cache
+        pricing: the eval runs report plain token totals, and caching would cut both models'
+        cost by a similar factor."""
+        standard = get_pricing(model).standard
+        return cls(model, float(standard.input), float(standard.output))
+
 
 # Hypothetical: the measured runs used free OpenRouter models. These are the Anthropic prices
 # the same token counts would cost on the models the project targets.
-STRONG_PRICE = Price("claude-sonnet-5-5", 2.0, 10.0)
-FAST_PRICE = Price("claude-haiku-5-5", 0.10, 0.50)
+STRONG_PRICE = Price.of("claude-sonnet-5-5")
+FAST_PRICE = Price.of("claude-haiku-5-5")
 
 
 class LabeledQuestion(BaseModel):
