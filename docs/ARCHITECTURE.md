@@ -10,7 +10,9 @@
 ## Request lifecycle
 
 1. `POST /ask` receives a question and a restaurant id.
-2. **Router** classifies complexity and picks the model tier.
+2. **Router** (off by default, `ROUTER_ENABLED`) predicts from the question text whether the
+   fast model is enough; each specialist runs on the model it picks. Measured not worth it
+   yet (README, Model router), so specialists use the strong model.
 3. **Planner** produces a `Plan` (list of steps with specialist and dependencies), through a
    validated `submit_plan` tool, or a direct answer for out-of-scope questions.
 4. **Executor** topologically sorts steps and runs independent ones concurrently. A step gets
@@ -34,7 +36,7 @@ Messages shape (`runtime/openrouter.py`, ADR 0004), selected by `MODEL_PROVIDER`
 | Orchestration | `src/brigada/orchestration` | Planner, DAG executor, synthesizer, critic, `answer()` |
 | MCP server | `src/brigada/mcp_server` | Read/write tools, human confirmation, audit log |
 | RAG | `src/brigada/rag` | Review search: Portuguese full-text, embeddings (OpenRouter), RRF fusion; index coverage reported to the caller; indexing in `rag/indexing.py` + `scripts/index_reviews.py` |
-| Router | `src/brigada/router` | Complexity classifier and model selection |
+| Router | `src/brigada/router` | Fast-vs-strong classifier (`train.py`: out-of-fold evaluation and routing simulation) and `choose_model` |
 | Observability | `src/brigada/observability` | OpenTelemetry setup, cost accounting |
 | API | `src/brigada/api` | FastAPI routes; `/console` live view of each specialist's runs |
 | Evals | `evals/` | Cases, metrics, judge, CI gate |

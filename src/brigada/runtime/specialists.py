@@ -14,6 +14,7 @@ from mcp.server.mcpserver import MCPServer
 
 from brigada.config import get_settings
 from brigada.prompts import load_prompt
+from brigada.router import choose_model
 from brigada.runtime.agent import Agent, AgentConfig, ModelClient, make_client
 from brigada.runtime.mcp_tools import mcp_toolbox, read_untrusted
 from brigada.runtime.state import RunStore, resume_persisted, run_persisted
@@ -118,7 +119,15 @@ async def ask(
     async with mcp_toolbox(
         run_id, restaurant_id, specialist.tools, server, tainted=tainted
     ) as toolbox:
-        agent = _agent(specialist, restaurant_id, today, client, toolbox.tools, toolbox.executor)
+        agent = _agent(
+            specialist,
+            restaurant_id,
+            today,
+            choose_model(question),
+            client,
+            toolbox.tools,
+            toolbox.executor,
+        )
         if store is None:
             result = await agent.run(question)
             result.run_id = run_id
@@ -155,7 +164,15 @@ async def resume(
         run_id, record.restaurant_id, specialist.tools, server, tainted=tainted
     ) as toolbox:
         agent = _agent(
-            specialist, record.restaurant_id, record.today, client, toolbox.tools, toolbox.executor
+            specialist,
+            record.restaurant_id,
+            record.today,
+            # Same question, same router file, same choice: the model the run started on. A
+            # retrained router or a changed setting is refused by resume_persisted.
+            choose_model(record.question),
+            client,
+            toolbox.tools,
+            toolbox.executor,
         )
         return await resume_persisted(
             agent, store, record, prompt_sha256=load_prompt(specialist.name).sha256
@@ -166,6 +183,7 @@ def _agent(
     specialist: Specialist,
     restaurant_id: int,
     today: date,
+    model: str,
     client: ModelClient | None,
     tools: list[ToolParam],
     executor: ToolExecutor,
@@ -174,7 +192,7 @@ def _agent(
     return Agent(
         AgentConfig(
             name=specialist.name,
-            model=settings.model_strong,
+            model=model,
             system=system_prompt(specialist, restaurant_id, today),
             max_steps=settings.max_agent_steps,
             tool_timeout_seconds=settings.tool_timeout_seconds,

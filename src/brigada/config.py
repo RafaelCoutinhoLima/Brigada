@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""
     model_strong: str = "claude-sonnet-4-6"
     model_fast: str = "claude-haiku-4-5"
+    # Model router (router/): off = specialists always use model_strong. On = a classifier
+    # trained by `python -m brigada.router.train` picks model_fast or model_strong per
+    # question; the model file must exist (it is not in git nor in the Docker image).
+    router_enabled: bool = False
+    router_model_path: str = "models/router.joblib"
     max_agent_steps: int = 10
     tool_timeout_seconds: float = 15.0
     timezone: str = "America/Sao_Paulo"

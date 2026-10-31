@@ -5,6 +5,9 @@ Only the text between ``<!-- results:start -->`` and ``<!-- results:end -->`` is
 Usage::
 
     uv run python scripts/update_readme_results.py evals/results/<run>.json [--readme README.md]
+
+The router row comes from ``evals/router_metrics.json`` (``python -m brigada.router.train``)
+when that file exists, and is "–" otherwise.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ def _pct(value: float | None) -> str:
     return DASH if value is None else f"{value * 100:.1f}%"
 
 
-def render_table(results: dict[str, Any]) -> str:
+def render_table(results: dict[str, Any], router_row: str | None = None) -> str:
     s = results["summary"]
     meta = results["meta"]
     subset = meta.get("subset") or "all"
@@ -43,7 +46,7 @@ def render_table(results: dict[str, Any]) -> str:
         ("p50 latency", DASH if p50 is None else f"{p50 / 1000:.1f} s"),
         ("p95 latency", DASH if p95 is None else f"{p95 / 1000:.1f} s"),
         ("Cost per question", DASH if cost is None else f"US$ {cost:.4f}"),
-        ("Router savings vs always-strong", DASH),
+        ("Router savings vs always-strong", router_row or DASH),
     ]
     lines = ["| Metric | Value |", "|--------|-------|"]
     lines += [f"| {name} | {value} |" for name, value in rows]
@@ -69,11 +72,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("results", type=Path, help="results JSON written by evals.run")
     parser.add_argument("--readme", type=Path, default=Path("README.md"))
+    parser.add_argument("--router-metrics", type=Path, default=Path("evals/router_metrics.json"))
     args = parser.parse_args(argv)
     results = json.loads(args.results.read_text(encoding="utf-8"))
+    router_row = None
+    if args.router_metrics.is_file():
+        router_row = json.loads(args.router_metrics.read_text(encoding="utf-8"))["readme_row"]
     readme = args.readme.read_text(encoding="utf-8")
     try:
-        updated = replace_between_markers(readme, render_table(results))
+        updated = replace_between_markers(readme, render_table(results, router_row))
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

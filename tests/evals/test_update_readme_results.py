@@ -63,6 +63,25 @@ def test_main_rewrites_readme(tmp_path: Path, results_file: Path) -> None:
     assert text.startswith("# Title") and text.endswith("untouched\n")
 
 
+def test_router_row_comes_from_the_router_metrics(tmp_path: Path, results_file: Path) -> None:
+    results = json.loads(results_file.read_text(encoding="utf-8"))
+    assert "| Router savings vs always-strong | 40% (estimate) |" in render_table(
+        results, "40% (estimate)"
+    )
+    readme = tmp_path / "README.md"
+    readme.write_text(README, encoding="utf-8")
+    metrics = tmp_path / "router_metrics.json"
+    metrics.write_text(json.dumps({"readme_row": "not worth it yet: x"}), encoding="utf-8")
+    argv = [str(results_file), "--readme", str(readme), "--router-metrics", str(metrics)]
+    assert main(argv) == 0
+    assert "| Router savings vs always-strong | not worth it yet: x |" in readme.read_text(
+        encoding="utf-8"
+    )
+    missing = [*argv[:3], "--router-metrics", str(tmp_path / "none.json")]
+    assert main(missing) == 0
+    assert "| Router savings vs always-strong | – |" in readme.read_text(encoding="utf-8")
+
+
 def test_repo_readme_has_markers() -> None:
     text = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
     assert text.count(START) == 1 and text.count(END) == 1

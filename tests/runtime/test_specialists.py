@@ -11,7 +11,9 @@ import psycopg
 import pytest
 from mcp import Client
 
+from brigada.config import get_settings
 from brigada.mcp_server.server import build_server
+from brigada.runtime import specialists
 from brigada.runtime.mcp_tools import UNTRUSTED_OUTPUT_TOOLS, WRITE_TOOLS
 from brigada.runtime.specialists import (
     MENU,
@@ -75,6 +77,27 @@ async def test_model_sees_exactly_the_specialist_tools(name: str) -> None:
     assert sorted(t["name"] for t in request["tools"]) == sorted(specialist.tools)
 
 
+async def test_router_off_specialists_use_the_strong_model() -> None:
+    assert get_settings().router_enabled is False
+    client = FakeClient(message(text("ok")))
+    await ask(SALES, "Quanto vendi ontem?", 1, TODAY, client=client, server=build_server())
+    assert client.messages.requests[0]["model"] == get_settings().model_strong
+
+
+async def test_the_router_choice_is_the_model_called(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[str] = []
+
+    def router(question: str) -> str:
+        asked.append(question)
+        return get_settings().model_fast
+
+    monkeypatch.setattr(specialists, "choose_model", router)
+    client = FakeClient(message(text("ok")))
+    await ask(SALES, "Quanto vendi ontem?", 1, TODAY, client=client, server=build_server())
+    assert asked == ["Quanto vendi ontem?"]
+    assert client.messages.requests[0]["model"] == get_settings().model_fast
+
+
 @pytest.fixture
 async def store() -> AsyncIterator[RunStore]:
     url = os.environ["DATABASE_URL"]
@@ -104,6 +127,52 @@ async def test_resume_picks_the_specialist_that_started_the_run(store: RunStore)
     assert sorted(t["name"] for t in request["tools"]) == sorted(OPERATIONS.tools)
     with pytest.raises(ValueError, match="belongs to agent 'operations'"):
         await resume(rid, store, client=FakeClient(), server=build_server(), expected=SALES)
+
+
+@pytest.mark.db
+async def test_resume_routes_the_stored_question_to_the_same_model(
+    store: RunStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fast, strong = get_settings().model_fast, get_settings().model_strong
+    monkeypatch.setattr(specialists, "choose_model", lambda q: fast if q == "q1" else strong)
+    rid = f"test-{uuid.uuid4().hex}"
+    with pytest.raises(anthropic.BadRequestError):
+        await ask(
+            SALES,
+            "q1",
+            1,
+            TODAY,
+            client=FakeClient(bad_request()),
+            server=build_server(),
+            run_id=rid,
+            store=store,
+        )
+    second = FakeClient(message(text("ok")))
+    await resume(rid, store, client=second, server=build_server())
+    assert second.messages.requests[0]["model"] == fast
+
+
+@pytest.mark.db
+async def test_resume_refuses_when_the_router_now_picks_another_model(
+    store: RunStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fast, strong = get_settings().model_fast, get_settings().model_strong
+    monkeypatch.setattr(specialists, "choose_model", lambda q: fast)
+    rid = f"test-{uuid.uuid4().hex}"
+    with pytest.raises(anthropic.BadRequestError):
+        await ask(
+            SALES,
+            "q1",
+            1,
+            TODAY,
+            client=FakeClient(bad_request()),
+            server=build_server(),
+            run_id=rid,
+            store=store,
+        )
+    monkeypatch.setattr(specialists, "choose_model", lambda q: strong)
+    with pytest.raises(ValueError, match=f"started on '{fast}'"):
+        await resume(rid, store, client=FakeClient(), server=build_server())
 
 
 @pytest.mark.db
