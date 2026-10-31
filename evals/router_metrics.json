@@ -1,0 +1,102 @@
+{
+  "n": 62,
+  "fast_failures": 8,
+  "cv": {
+    "k": 4,
+    "repeats": 20,
+    "threshold": 0.5
+  },
+  "prices_per_mtok": {
+    "strong": {
+      "model": "claude-sonnet-5-5",
+      "input_per_mtok": 2.0,
+      "output_per_mtok": 10.0
+    },
+    "fast": {
+      "model": "claude-haiku-5-5",
+      "input_per_mtok": 0.1,
+      "output_per_mtok": 0.5
+    },
+    "note": "hypothetical: the runs used free OpenRouter models"
+  },
+  "strategies": {
+    "always_strong": {
+      "passed": 56,
+      "n": 62,
+      "to_fast": 0,
+      "cost_usd": 2.9782,
+      "accuracy": 0.9032,
+      "accuracy_ci95": [
+        0.8045,
+        0.9549
+      ],
+      "fast_fraction": 0.0
+    },
+    "always_fast": {
+      "passed": 54,
+      "n": 62,
+      "to_fast": 62,
+      "cost_usd": 0.1664,
+      "accuracy": 0.871,
+      "accuracy_ci95": [
+        0.7655,
+        0.9331
+      ],
+      "fast_fraction": 1.0
+    },
+    "oracle": {
+      "passed": 61,
+      "n": 62,
+      "to_fast": 55,
+      "cost_usd": 0.5675,
+      "accuracy": 0.9839,
+      "accuracy_ci95": [
+        0.9141,
+        0.9971
+      ],
+      "fast_fraction": 0.8871
+    },
+    "routed": {
+      "accuracy": {
+        "mean": 0.871,
+        "min": 0.871,
+        "max": 0.871
+      },
+      "passed": {
+        "mean": 54.0,
+        "min": 54.0,
+        "max": 54.0
+      },
+      "fast_fraction": {
+        "mean": 0.9677,
+        "min": 0.9355,
+        "max": 0.9839
+      },
+      "cost_usd": {
+        "mean": 0.2793,
+        "min": 0.2072,
+        "max": 0.3898
+      }
+    }
+  },
+  "classifier": {
+    "roc_auc": {
+      "mean": 0.4265,
+      "min": 0.3125,
+      "max": 0.5116
+    },
+    "fast_failures_sent_to_strong": {
+      "mean": 0.0,
+      "min": 0.0,
+      "max": 0.0
+    },
+    "fast_successes_sent_to_strong": {
+      "mean": 2.0,
+      "min": 1.0,
+      "max": 4.0
+    }
+  },
+  "routed_beats_always_fast_in_repeats": 0,
+  "routed_savings_vs_always_strong": 0.9062,
+  "readme_row": "not worth it yet: routed 87.1% (range 87.1–87.1%) vs always-fast 87.1% and always-strong 90.3%, 97% sent to fast; out-of-fold, n=62"
+}
