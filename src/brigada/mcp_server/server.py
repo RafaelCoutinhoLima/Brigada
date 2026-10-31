@@ -360,10 +360,14 @@ def build_server(embedder: Embedder | None = None) -> BrigadaMCPServer:
                 return hit
             (vector,) = await embedders[0].embed([text])
             embedding = QueryEmbedding(model, tuple(check_vector(vector)))
-        except Exception:
+        except Exception as exc:
             # Any embedder failure (ours raise EmbeddingError; a bad vector, ValueError) is a
-            # reported downgrade, never an error text handed to the model.
-            logger.warning("search_reviews: embedding unavailable, keyword search only")
+            # reported downgrade, never an error text handed to the model. Only the class is
+            # logged: the message may echo the query (customer text) or a provider secret.
+            logger.warning(
+                "search_reviews: embedding unavailable (%s), keyword search only",
+                type(exc).__name__,
+            )
             trace.get_current_span().set_attribute("brigada.search.degraded", True)
             return None
         if len(cache) >= QUERY_CACHE_SIZE:

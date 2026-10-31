@@ -1,5 +1,6 @@
 """search_reviews: semantic search scoped to the trusted restaurant, honest about downgrades."""
 
+import logging
 from collections.abc import Iterator, Sequence
 from datetime import datetime
 from typing import Any
@@ -124,6 +125,17 @@ async def test_any_embedding_failure_is_a_reported_keyword_search(embedder: Any)
     out = await call(embedder, restaurant_id=2, query="micro-ondas", limit=3)
     assert out["mode"] == "keyword" and out["items"]
     assert "sk-secret" not in str(out)
+
+
+@pytest.mark.usefixtures("run_id")
+async def test_a_degraded_search_logs_the_error_class_not_the_query_or_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="brigada.mcp_server.server")
+    await call(Broken(error=RuntimeError("boom sk-secret")), restaurant_id=2, query="micro-ondas")
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in logged
+    assert "sk-secret" not in logged and "micro-ondas" not in logged
 
 
 @pytest.mark.usefixtures("run_id")
