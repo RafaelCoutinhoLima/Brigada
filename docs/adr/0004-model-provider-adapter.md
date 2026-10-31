@@ -1,6 +1,6 @@
 # 0004. Provedor de modelo trocável por um adaptador no formato da API da Anthropic
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-10-29
 
 ## Contexto
@@ -44,8 +44,24 @@ Detalhes que fazem parte da opção 3:
 
 ## Decisão
 
-_Pendente._
+Escolhi a opção 3: um adaptador que deixa o OpenRouter falar o formato da Anthropic. Os
+motivos foram dois:
+
+- **Não ficar preso a um provedor.** A Anthropic continua disponível: basta trocar
+  `MODEL_PROVIDER` no `.env`, sem mudar código.
+- **Não gastar dinheiro para validar a ideia.** Os modelos `:free` do OpenRouter permitiram
+  desenvolver e rodar os evals sem custo.
 
 ## Consequências
 
-_Pendente._
+- **Melhorou:** desenvolvi e testei o produto inteiro sem investir em API. Os modelos gratuitos
+  da NVIDIA (família Nemotron) deram conta das tarefas. Na minha experiência ficaram no nível
+  de modelos pequenos pagos como o Haiku, mas não comparei os dois lado a lado num eval.
+- **Piorou:** os modelos gratuitos têm limite de requisições e de tokens, e às vezes ficam
+  sobrecarregados (erros 429 e 503). Um eval completo leva perto de uma hora. Recursos sem
+  equivalente no OpenRouter, como prompt caching e blocos de thinking, se perdem nesse
+  provedor.
+- **Como sei que deu certo:** o eval completo deu 90,3% de acerto (56 de 62) com custo zero,
+  e o resto do sistema (retry, auditoria, checagem de números) não precisou mudar para
+  trocar de provedor. Serviu para testar a tese e o produto. Em produção, o passo seguinte é
+  medir o mesmo eval num modelo pago.

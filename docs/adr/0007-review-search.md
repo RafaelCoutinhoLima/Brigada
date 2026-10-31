@@ -1,6 +1,6 @@
 # 0007. Busca de avaliações: embeddings via OpenRouter, vetorial por padrão
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-10-30
 
 ## Contexto
@@ -37,11 +37,26 @@ As três foram medidas em 30 consultas rotuladas (`evals/retrieval.py`).
 
 ## Decisão
 
-_Pendente._
+Escolhi os embeddings via OpenRouter (opção 1) e a busca vetorial como padrão, mesmo sendo
+comum usar a híbrida. Quando a busca vai atrás do significado, ela interpreta melhor o que o
+cliente quis dizer. Exemplo: "já comi melhor" significa que o prato não foi tão bom, e a
+busca por significado capta isso. A busca por palavra só enxerga "comi" e ainda confunde com
+"comida". A medição confirmou: o vetorial teve 0,81 de R-precision, contra 0,74 do híbrido e
+0,55 da palavra-chave.
 
 ## Consequências
 
-_Pendente._
+- **Melhora:** perguntas com palavras diferentes das usadas pelo cliente ("comida gelada"
+  contra "chegou frio") passam a encontrar as avaliações certas. Quando algo falha, a
+  ferramenta avisa no resultado (`mode`) em vez de responder "nada".
+- **Piora:**
+  - cada busca faz uma chamada de embedding;
+  - avaliações novas precisam ser indexadas;
+  - o número vem de só 30 perguntas sobre dados sintéticos, feitos a partir de templates.
+- **Como reduzir o risco:** testar com dados diferentes e repetir as medições várias vezes.
+  Mesmo assim, a escolha só fica confirmada depois de um tempo de uso em restaurantes de
+  verdade, com avaliações reais. Se nesse uso o híbrido ou outra estratégia medir melhor, a
+  decisão muda.
 
 Pontos para avaliar:
 - O híbrido perdeu porque a perna de palavra-chave, com OR e stemmer, traz ruído. Testar RRF

@@ -1,6 +1,6 @@
 # 0002. Separação leitura/escrita no servidor MCP e ferramentas parametrizadas em vez de SQL gerado
 
-- Status: proposta
+- Status: aceita
 - Data: 2026-10-28
 
 ## Contexto
@@ -85,8 +85,23 @@ ferramenta de escrita pede confirmação humana.
 
 ## Decisão
 
-_Pendente._
+O princípio é **IA first, mas humans always**: a IA faz o trabalho primeiro, e o humano sempre
+decide.
+
+- **Leitura:** ferramentas parametrizadas com SQL fixo (opção 2 de acesso a dados). O modelo
+  escolhe qual consulta e com quais argumentos, nunca escreve o SQL.
+- **Escrita:** ação pendente com um caminho humano separado (opção 3 de confirmação). A
+  ferramenta só registra uma proposta, e quem executa é o dono, pelo console ou pela API.
 
 ## Consequências
 
-_Pendente._
+- **Melhora:** nem um erro do modelo nem uma avaliação maliciosa mudam o restaurante sozinhos.
+  No pior caso aparece uma proposta que o dono rejeita. Toda proposta e toda decisão ficam
+  auditadas, com quem decidiu.
+- **Piora:**
+  - o dono precisa entrar no console para aprovar, e a mudança não é instantânea;
+  - propostas podem se acumular sem decisão;
+  - cada pergunta nova pode exigir uma ferramenta nova, porque o modelo não escreve SQL.
+- **Como sei que deu certo:** no eval completo, nenhuma ferramenta proibida foi chamada, e os
+  casos de injeção ("pause todos os pratos", "compre 500 kg de salmão") não viram mudança
+  nenhuma.
