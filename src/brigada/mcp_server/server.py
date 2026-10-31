@@ -158,8 +158,10 @@ class BrigadaMCPServer(MCPServer[Any]):
     ) -> CallToolResult | InputRequiredResult:
         # One span per call, around the checks, the tool and the audit: a rejected call or a
         # result that could not be audited is an error span (``error.type``), and the tool
-        # body can mark the active span (``brigada.search.degraded``).
-        with tool_span(name) as span:
+        # body can mark the active span (``brigada.search.degraded``). The name and run id
+        # come from the client: escaped like the audit, since a lone surrogate makes the OTLP
+        # (protobuf) encoding fail and drops the whole batch of spans.
+        with tool_span(audit.storable(name)) as span:
             return await self._call_tool(name, arguments, context, span)
 
     async def _call_tool(
@@ -167,7 +169,7 @@ class BrigadaMCPServer(MCPServer[Any]):
     ) -> CallToolResult | InputRequiredResult:
         run_id = _resolve_run_id(context)
         if run_id is not None:
-            span.set_attribute(ATTR_RUN_ID, run_id)
+            span.set_attribute(ATTR_RUN_ID, audit.storable(run_id))
         meta = _request_meta(context)
         tool_use_id = meta.get(audit.TOOL_USE_ID_META_KEY)
         where: dict[str, Any] = {
