@@ -1,4 +1,7 @@
 import asyncio
+import os
+import subprocess
+import sys
 
 import pytest
 from anthropic.types import Usage
@@ -137,6 +140,24 @@ def test_setup_tracing_is_idempotent(spans: InMemorySpanExporter) -> None:
 )
 def test_resolve_exporter(value: str | None, expected: str) -> None:
     assert resolve_exporter(value) == expected
+
+
+def test_console_spans_never_go_to_stdout() -> None:
+    """The MCP server speaks JSON-RPC on stdout: a span printed there corrupts the protocol."""
+    script = (
+        "from brigada.observability.tracing import setup_tracing, tool_span\n"
+        "provider = setup_tracing(service_name='brigada-mcp', exporter='console')\n"
+        "with tool_span('list_menu_items'):\n"
+        "    pass\n"
+        "provider.shutdown()\n"
+    )
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+    done = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, env=env, timeout=60
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+    assert "execute_tool list_menu_items" in done.stderr
 
 
 def test_resolve_exporter_invalid() -> None:

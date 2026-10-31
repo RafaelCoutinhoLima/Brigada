@@ -1,5 +1,6 @@
 """search_reviews: semantic search scoped to the trusted restaurant, honest about downgrades."""
 
+import logging
 from collections.abc import Iterator, Sequence
 from datetime import datetime
 from typing import Any
@@ -127,6 +128,17 @@ async def test_any_embedding_failure_is_a_reported_keyword_search(embedder: Any)
 
 
 @pytest.mark.usefixtures("run_id")
+async def test_a_degraded_search_logs_the_error_class_not_the_query_or_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="brigada.mcp_server.server")
+    await call(Broken(error=RuntimeError("boom sk-secret")), restaurant_id=2, query="micro-ondas")
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in logged
+    assert "sk-secret" not in logged and "micro-ondas" not in logged
+
+
+@pytest.mark.usefixtures("run_id")
 async def test_a_question_with_no_matching_word_returns_nothing_rather_than_noise() -> None:
     out = await call(Broken(), restaurant_id=2, query="zzzz qqqq", limit=3)
     assert (out["mode"], out["items"]) == ("keyword", [])
@@ -134,10 +146,10 @@ async def test_a_question_with_no_matching_word_returns_nothing_rather_than_nois
 
 @pytest.mark.usefixtures("run_id")
 async def test_the_final_fetch_drops_ids_of_another_restaurant(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Second barrier: even if search() leaked an id of restaurant 1, restaurant 2 never sees
-    its text."""
+    its text. It should never fire, so when it does it is logged as an error."""
     with connect() as conn:
         foreign = conn.execute("SELECT id FROM reviews WHERE restaurant_id = 1 LIMIT 1").fetchone()
     assert foreign is not None
@@ -146,6 +158,9 @@ async def test_the_final_fetch_drops_ids_of_another_restaurant(
     )
     out = await call(Broken(), restaurant_id=2, query="qualquer", limit=3)
     assert out["items"] == []
+    errors = [r for r in caplog.records if r.name == search_module.logger.name]
+    assert [r.levelno for r in errors] == [logging.ERROR]
+    assert "qualquer" not in errors[0].getMessage()
 
 
 def test_keyword_search_ors_terms_ignores_accents_and_ranks_best_first() -> None:

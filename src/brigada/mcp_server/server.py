@@ -28,6 +28,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import CallToolResult, InputRequiredResult, TextContent, ToolAnnotations
 from opentelemetry import trace
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ValidationError
 
 from brigada.mcp_server import audit, inventory, pending, queries, search
@@ -82,6 +83,7 @@ from brigada.mcp_server.models import (
     WasteReportInput,
     WasteReportResult,
 )
+from brigada.observability.tracing import ATTR_RESTAURANT_ID, ATTR_RUN_ID, tool_span
 from brigada.rag.embeddings import Embedder, check_vector, default_embedder
 from brigada.rag.retrieval import QueryEmbedding
 
@@ -154,7 +156,20 @@ class BrigadaMCPServer(MCPServer[Any]):
     async def call_tool(
         self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
     ) -> CallToolResult | InputRequiredResult:
+        # One span per call, around the checks, the tool and the audit: a rejected call or a
+        # result that could not be audited is an error span (``error.type``), and the tool
+        # body can mark the active span (``brigada.search.degraded``). The name and run id
+        # come from the client: escaped like the audit, since a lone surrogate makes the OTLP
+        # (protobuf) encoding fail and drops the whole batch of spans.
+        with tool_span(audit.storable(name)) as span:
+            return await self._call_tool(name, arguments, context, span)
+
+    async def _call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None, span: Span
+    ) -> CallToolResult | InputRequiredResult:
         run_id = _resolve_run_id(context)
+        if run_id is not None:
+            span.set_attribute(ATTR_RUN_ID, audit.storable(run_id))
         meta = _request_meta(context)
         tool_use_id = meta.get(audit.TOOL_USE_ID_META_KEY)
         where: dict[str, Any] = {
@@ -168,6 +183,8 @@ class BrigadaMCPServer(MCPServer[Any]):
                 _reject_nul(name, arguments)
                 self._reject_unknown_arguments(name, arguments)
                 where["restaurant_id"] = scope = _resolve_restaurant_id(context)
+                if scope is not None:
+                    span.set_attribute(ATTR_RESTAURANT_ID, scope)
                 registered = self._tool_manager.get_tool(name) is not None
                 _check_scope(arguments, scope, registered=registered)
                 await self._refuse_writes_when_tainted(name, meta, run_id)
@@ -345,10 +362,14 @@ def build_server(embedder: Embedder | None = None) -> BrigadaMCPServer:
                 return hit
             (vector,) = await embedders[0].embed([text])
             embedding = QueryEmbedding(model, tuple(check_vector(vector)))
-        except Exception:
+        except Exception as exc:
             # Any embedder failure (ours raise EmbeddingError; a bad vector, ValueError) is a
-            # reported downgrade, never an error text handed to the model.
-            logger.warning("search_reviews: embedding unavailable, keyword search only")
+            # reported downgrade, never an error text handed to the model. Only the class is
+            # logged: the message may echo the query (customer text) or a provider secret.
+            logger.warning(
+                "search_reviews: embedding unavailable (%s), keyword search only",
+                type(exc).__name__,
+            )
             trace.get_current_span().set_attribute("brigada.search.degraded", True)
             return None
         if len(cache) >= QUERY_CACHE_SIZE:
