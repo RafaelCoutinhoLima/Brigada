@@ -21,6 +21,7 @@ import functools
 import inspect
 import logging
 import os
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from decimal import Decimal
@@ -100,7 +101,9 @@ def setup_tracing(
 
     provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
     if name == "console":
-        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+        # stderr, never stdout: the MCP server speaks JSON-RPC on stdout, and a span printed
+        # there would corrupt the protocol.
+        provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter(out=sys.stderr)))
     elif name == "otlp":
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
