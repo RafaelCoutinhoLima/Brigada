@@ -146,10 +146,10 @@ async def test_a_question_with_no_matching_word_returns_nothing_rather_than_nois
 
 @pytest.mark.usefixtures("run_id")
 async def test_the_final_fetch_drops_ids_of_another_restaurant(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Second barrier: even if search() leaked an id of restaurant 1, restaurant 2 never sees
-    its text."""
+    its text. It should never fire, so when it does it is logged as an error."""
     with connect() as conn:
         foreign = conn.execute("SELECT id FROM reviews WHERE restaurant_id = 1 LIMIT 1").fetchone()
     assert foreign is not None
@@ -158,6 +158,9 @@ async def test_the_final_fetch_drops_ids_of_another_restaurant(
     )
     out = await call(Broken(), restaurant_id=2, query="qualquer", limit=3)
     assert out["items"] == []
+    errors = [r for r in caplog.records if r.name == search_module.logger.name]
+    assert [r.levelno for r in errors] == [logging.ERROR]
+    assert "qualquer" not in errors[0].getMessage()
 
 
 def test_keyword_search_ors_terms_ignores_accents_and_ranks_best_first() -> None:

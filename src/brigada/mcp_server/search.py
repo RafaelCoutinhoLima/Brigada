@@ -56,6 +56,15 @@ def search_reviews(
             (inp.restaurant_id, ids),
         ).fetchall()
     }
+    if dropped := [i for i in ids if i not in rows]:
+        # The second tenant barrier fired: ``search`` returned ids this restaurant does not
+        # own (or that vanished meanwhile). It should never happen; ids only, never the query.
+        logger.error(
+            "search_reviews: restaurant %s got %d review ids it does not own: %s",
+            inp.restaurant_id,
+            len(dropped),
+            dropped,
+        )
     tz = local_tz()
     return SearchReviewsResult(
         restaurant_id=inp.restaurant_id,
