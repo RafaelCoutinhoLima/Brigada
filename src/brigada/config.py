@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     # semantic search (keyword only, reported in the tool result).
     embedding_model: str = "nvidia/nemotron-3.5-embed-1b:free"
     embedding_api_key: str = ""
-    model_strong: str = "claude-sonnet-4-6"
-    model_fast: str = "claude-haiku-4-5"
+    model_strong: str = "claude-sonnet-5-5"
+    model_fast: str = "claude-haiku-5-5"
     # Model router (router/): off = specialists always use model_strong. On = a classifier
     # trained by `python -m brigada.router.train` picks model_fast or model_strong per
     # question; the model file must exist (it is not in git nor in the Docker image).
