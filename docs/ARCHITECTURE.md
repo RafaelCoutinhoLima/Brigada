@@ -39,7 +39,7 @@ Messages shape (`runtime/openrouter.py`, ADR 0004), selected by `MODEL_PROVIDER`
 | Router | `src/brigada/router` | Fast-vs-strong classifier (`train.py`: out-of-fold evaluation and routing simulation) and `choose_model` |
 | Observability | `src/brigada/observability` | OpenTelemetry setup, cost accounting |
 | API | `src/brigada/api` | FastAPI routes; `/console` live view of each specialist's runs |
-| Evals | `evals/` | Cases, metrics, judge, CI gate |
+| Evals | `evals/` | Cases, metrics, judge (planned), regression gate against a baseline |
 
 ## Data model
 

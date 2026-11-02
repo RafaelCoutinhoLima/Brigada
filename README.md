@@ -4,6 +4,10 @@
 
 Ask a question like *"Why did my sales drop yesterday?"*, *"What do customers complain about in my menu?"* or *"What will run out before the next delivery?"*. A planner agent breaks it into steps, specialist agents query real data through an MCP server, a critic agent reviews the answer, and every step is traced with tokens, latency and cost.
 
+![Live console: the planner splits the question, the specialists investigate in parallel, the critic approves the answer](docs/img/console.png)
+
+_The live console answering "Why did my sales drop last Tuesday?" (demo mode, simulated data: open `/console?demo`)._
+
 > Status: 🚧 in active development. Runtime, MCP server, orchestration, inventory, review search, the owner's approval flow, the live console and the model router (trained, off by default) are in; a calibrated LLM judge is next.
 
 ## Why from scratch
@@ -31,7 +35,7 @@ Frameworks hide the parts that matter in production: the tool-use loop, retries,
                └──────────────┘
 ```
 
-Cross-cutting: model router (ML classifier), guardrails, OpenTelemetry tracing, eval suite in CI.
+Cross-cutting: model router (ML classifier), guardrails, OpenTelemetry tracing, eval suite (harness and security tests run in CI; live model runs on demand).
 
 Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -44,7 +48,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 3 | MCP server | Read/write tool separation, human-in-the-loop, append-only audit log |
 | 4 | Review search (RAG) | Portuguese full-text + embeddings + RRF over customer reviews, measured on 30 labeled queries |
 | 5 | Model router | Classifier choosing fast vs strong model per question, measured out-of-fold against always-strong, always-fast and an oracle; off by default |
-| 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, versioned prompts, CI gate; LLM-as-judge planned |
+| 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, versioned prompts, regression gate against a baseline (`--fail-under-baseline`); LLM-as-judge planned |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
 
@@ -60,7 +64,7 @@ _Filled in as modules ship._
 | Mean steps | 4.34 |
 | p50 latency | 37.7 s |
 | p95 latency | 93.3 s |
-| Cost per question | US$ 0.0000 |
+| Cost per question | US$ 0 (free models in this run) |
 | Router savings vs always-strong | not worth it yet: routed 87.1% (range 87.1–87.1%) vs always-fast 87.1% and always-strong 90.3%, 97% sent to fast; out-of-fold, n=62 |
 
 _Answerer `brigada.orchestration:answer`, all 62 cases including the 11 inventory ones, commit `3d12ae8`, 2026-10-30. Models: OpenRouter `:free` (nemotron-3.5-super-vl for specialists and synthesis, nemotron-3.5-lightning for planner and critic). Earlier runs: 94% on the 50 cases without inventory; 60% on the first real run. One of the 6 misses (inv-010: the model sent `category="None"` and read the empty list as "no margins") is fixed since; `inject-010` (an injection found by search) was added after this run._
@@ -80,7 +84,6 @@ R-precision by query kind (12 exact wordings, 14 paraphrases, 4 planted injectio
 
 Vector search wins on this corpus, so it is the tool's default. Every downgrade is reported in the result: `hybrid` when part of the reviews has no vector yet (the keyword leg finds them), `keyword` when embedding fails or the index is empty. Hybrid lost because OR-ed keyword matches add noise (the Portuguese stemmer maps *comida* and *comi* to the same stem) that RRF promotes. It only helped on the planted injection reviews. Reviews are customer text, so a search taints the run and disables write tools, like `reviews_for_item`.
 
-
 ### Model router
 
 Can a classifier send the easy questions to the cheap model? The same 62 cases were run live twice, once with `nemotron-3.5-super-vl` (strong) and once with `nemotron-3.5-lightning` (fast) as `MODEL_STRONG`, i.e. in the specialists and the synthesis (inferred from the configuration: the result files do not record the models); `evals/router_labels.jsonl` keeps both outcomes per question. The router (`python -m brigada.router.train`) is TF-IDF over characters and words plus a class-balanced logistic regression on the question text, predicting "the fast model passes". All numbers below are out-of-fold (stratified 4-fold, repeated with 20 seeds, threshold fixed at 0.5); cost applies Anthropic prices (Sonnet 5.5 for strong, Haiku 5.5 for fast) to the measured tokens of each whole answer (planner, specialists, synthesis, critic), so it is an **estimate**: the runs themselves used free models.
@@ -96,7 +99,7 @@ The classifier finds no signal: out-of-fold ROC AUC 0.43 (range 0.31–0.51, 0.5
 
 ## Stack
 
-Python 3.12 · FastAPI · Anthropic SDK (no agent framework) · OpenRouter adapter · MCP Python SDK · Postgres + pgvector (Supabase) · scikit-learn · OpenTelemetry · GitHub Actions · Docker · Railway
+Python 3.12 · FastAPI · Anthropic SDK (no agent framework) · OpenRouter adapter · MCP Python SDK · Postgres + pgvector · scikit-learn · OpenTelemetry · GitHub Actions · Docker
 
 ## Running locally
 
