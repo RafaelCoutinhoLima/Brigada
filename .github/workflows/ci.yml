@@ -50,7 +50,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: docker build -t brigada:ci .
 
-  # Habilitar quando o orquestrador existir: roda 15 casos de eval e falha se a acurácia cair
+  # Live eval gate, off until a model API key is set as a repository secret: runs the "ci"
+  # subset against a real model and fails if accuracy drops more than 5 points below baseline.
   # evals:
   #   runs-on: ubuntu-latest
   #   needs: test
