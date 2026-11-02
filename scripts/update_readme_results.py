@@ -28,6 +28,13 @@ def _pct(value: float | None) -> str:
     return DASH if value is None else f"{value * 100:.1f}%"
 
 
+def _cost(value: float | None) -> str:
+    if value is None:
+        return DASH
+    # Free models (e.g. OpenRouter ":free") are priced at zero: say so instead of "0.0000".
+    return "US$ 0 (free models in this run)" if value == 0 else f"US$ {value:.4f}"
+
+
 def render_table(results: dict[str, Any], router_row: str | None = None) -> str:
     s = results["summary"]
     meta = results["meta"]
@@ -45,7 +52,7 @@ def render_table(results: dict[str, Any], router_row: str | None = None) -> str:
         ("Mean steps", DASH if steps is None else f"{steps:.2f}"),
         ("p50 latency", DASH if p50 is None else f"{p50 / 1000:.1f} s"),
         ("p95 latency", DASH if p95 is None else f"{p95 / 1000:.1f} s"),
-        ("Cost per question", DASH if cost is None else f"US$ {cost:.4f}"),
+        ("Cost per question", _cost(cost)),
         ("Router savings vs always-strong", router_row or DASH),
     ]
     lines = ["| Metric | Value |", "|--------|-------|"]

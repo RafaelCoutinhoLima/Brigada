@@ -85,3 +85,11 @@ def test_router_row_comes_from_the_router_metrics(tmp_path: Path, results_file: 
 def test_repo_readme_has_markers() -> None:
     text = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
     assert text.count(START) == 1 and text.count(END) == 1
+
+
+def test_zero_cost_says_the_run_used_free_models(results_file: Path) -> None:
+    results = json.loads(results_file.read_text(encoding="utf-8"))
+    results["summary"]["cost_per_question_usd"] = 0.0
+    assert "| Cost per question | US$ 0 (free models in this run) |" in render_table(results)
+    results["summary"]["cost_per_question_usd"] = 0.0123
+    assert "| Cost per question | US$ 0.0123 |" in render_table(results)
