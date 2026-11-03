@@ -37,7 +37,7 @@ Messages shape (`runtime/openrouter.py`, ADR 0004), selected by `MODEL_PROVIDER`
 | MCP server | `src/brigada/mcp_server` | Read/write tools, human confirmation, audit log |
 | RAG | `src/brigada/rag` | Review search: Portuguese full-text, embeddings (OpenRouter), RRF fusion; index coverage reported to the caller; indexing in `rag/indexing.py` + `scripts/index_reviews.py` |
 | Router | `src/brigada/router` | Fast-vs-strong classifier (`train.py`: out-of-fold evaluation and routing simulation) and `choose_model` |
-| Lakehouse | `lakehouse/`, `src/brigada/lakehouse` | Databricks medallion pipeline (bundle, PySpark transforms) and the fixed-SQL reads behind `sales_vs_baseline` / `item_trends`; registered only when configured. See ADR 0009 and `docs/lakehouse.md` |
+| Lakehouse | `lakehouse/`, `src/brigada/lakehouse` | Databricks medallion pipeline over the synthetic and real sources (bundle, per-source PySpark modules, gold) and the fixed-SQL reads behind `sales_vs_baseline` / `item_trends` / `delivery_performance`; registered only when configured. See ADR 0009 and `docs/lakehouse.md` |
 | Observability | `src/brigada/observability` | OpenTelemetry setup, cost accounting |
 | API | `src/brigada/api` | FastAPI routes; `/console` live view of each specialist's runs |
 | Evals | `evals/` | Cases, metrics, judge (planned), regression gate against a baseline |
@@ -65,17 +65,26 @@ pending_actions(id, run_id, tool, restaurant_id, payload jsonb, status, decided_
 promotions(id, restaurant_id, menu_item_id, discount_pct, start_date, end_date, ...)
 ```
 
-Lakehouse (Databricks, Unity Catalog `<catalog>.<schema>`), rebuilt from an export of the
-tables above (no reviews):
+Lakehouse (Databricks, Unity Catalog `<catalog>.<schema>`), rebuilt from raw files per source
+(`brigada`: export of the tables above without reviews; `delivery_center`: the Kaggle download):
 
 ```
-bronze_{restaurants,menu_items,orders,order_items}   raw CSV, all strings
-silver_*                                             typed, deduplicated, expectations
-gold_daily_channel_sales(restaurant_id, day, iso_weekday, channel, orders, revenue,
-     baseline_weeks, baseline_orders, baseline_revenue, revenue_change_pct)
-gold_item_daily_sales(restaurant_id, day, menu_item_id, item_name, category, active,
-     qty, revenue, orders)
+bronze_<source>_<table>                  raw CSV as uploaded, all strings
+silver_<source>_{restaurants,orders,...} cleaned and mapped to the conformed contract
+silver_{restaurants,orders,order_items,menu_items}   union of the sources
+gold_restaurants(restaurant_id, source, source_id, name, segment, city, state, data_from,
+     data_until, completed_orders)
+gold_daily_channel_sales(restaurant_id, source, day, iso_weekday, channel, orders, revenue,
+     canceled_orders, baseline_weeks, baseline_orders, baseline_revenue, revenue_change_pct)
+gold_item_daily_sales(restaurant_id, day, menu_item_id, item_name, category, active, qty,
+     revenue, orders)
+gold_delivery_hourly(restaurant_id, source, day, iso_weekday, hour, delivered_orders,
+     delivery_minutes_sum, promised_minutes_sum, promised_count, late_orders,
+     distance_km_sum, distance_count)
 ```
+
+`restaurants.data_source` (`brigada` | `lakehouse`) marks real-dataset restaurants, registered
+from `gold_restaurants`; the Postgres tools refuse them.
 
 ## Threat model (summary)
 

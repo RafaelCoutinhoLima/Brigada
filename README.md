@@ -35,7 +35,7 @@ Frameworks hide the parts that matter in production: the tool-use loop, retries,
                └──────────────┘
 ```
 
-Optional analytical layer: a Databricks lakehouse (medallion pipeline, serverless) whose gold tables two extra read tools query through a SQL warehouse ([Lakehouse](#lakehouse-databricks)).
+Optional analytical layer: a Databricks lakehouse (medallion pipeline, serverless) that cleans a real dataset next to the synthetic one; three extra read tools query its gold tables through a SQL warehouse ([Lakehouse](#lakehouse-databricks)).
 
 Cross-cutting: model router (ML classifier), guardrails, OpenTelemetry tracing, eval suite (harness and security tests run in CI; live model runs on demand).
 
@@ -53,7 +53,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, versioned prompts, regression gate against a baseline (`--fail-under-baseline`); LLM-as-judge planned |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
-| 9 | Lakehouse (Databricks) | Medallion pipeline (Lakeflow Declarative Pipelines, Asset Bundle, data quality expectations) feeding two fixed-SQL MCP tools; off unless configured |
+| 9 | Lakehouse (Databricks) | Real data (Delivery Center) and synthetic data through a medallion pipeline (Lakeflow Declarative Pipelines, Asset Bundle, data quality expectations) feeding three fixed-SQL MCP tools; off unless configured |
 
 ## Results
 
@@ -102,19 +102,33 @@ The classifier finds no signal: out-of-fold ROC AUC 0.43 (range 0.31–0.51, 0.5
 
 ## Lakehouse (Databricks)
 
-Two questions kept costing the sales specialist several calls and a comparison done by the model: *"why did sales drop on Tuesday?"* (split by channel, compare with the same weekday before) and *"which dish sold less this week?"* (two `top_items` lists to cross, and a dish that stopped selling just disappears). Both are historical aggregates, so they now live in a lakehouse ([ADR 0009](docs/adr/0009-lakehouse-databricks.md)):
+The agents also work on a **real dataset**, cleaned in a Databricks lakehouse ([ADR 0009](docs/adr/0009-lakehouse-databricks.md)). No public, real, item-level dataset of Brazilian restaurants exists, so the closest real one was picked: [Delivery Center](https://www.kaggle.com/datasets/nosbielcs/brazilian-delivery-center), ~369k orders (Jan–Apr 2021) of a Brazilian platform connecting stores to marketplaces, anonymized by its authors. The synthetic data stays alongside: it has the eval ground truth.
 
 ```
-Postgres ─export─► UC volume (CSV) ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► Sales
-                                      └─ Lakeflow Declarative Pipeline, serverless ─┘
+Postgres (synthetic) ─export─┐
+                             ├─► UC volume raw/<source>/ ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► agents
+Kaggle (Delivery Center) ────┘                             └─ Lakeflow Declarative Pipeline ─┘
 ```
 
-- **bronze**: the exported CSV as read, plus source file and read time. Reviews never leave Postgres (customer text).
-- **silver**: typed with `try_cast`, deduplicated, `expect_all_or_drop` rules (known channel, non-negative totals, positive quantities); local day and hour computed once (America/Sao_Paulo, independent of the Spark session time zone).
-- **gold**: `gold_daily_channel_sales` (day × channel, zero-filled, next to the mean of the same weekday over the previous 4 weeks) and `gold_item_daily_sales` (day × dish, zero-filled over every dish).
-- **tools**: `sales_vs_baseline` and `item_trends` run fixed, parameterized SQL on the gold tables, through the same MCP server (tenant scope, audit, error mapping). Every result carries `data_until`, and a `note` when the requested days are not in the lakehouse yet: missing, never zero.
+- **bronze**: each source's files as uploaded (the original is always re-processable).
+- **silver**: one module per source maps it to a single conformed contract (restaurants, orders with local time, status, channel, delivery time, distance; order lines when the source has them), with `expect_all_or_drop` data quality rules. Gold, the tools and the agents never see source-specific columns.
+- **gold**: zero-filled daily aggregates: sales per channel next to the same weekday's 4-week baseline, sales per dish, delivery time / promise / lateness / distance per hour, and the restaurant registry with its coverage.
+- **tools**: `sales_vs_baseline`, `item_trends` (Sales) and `delivery_performance` (Operations) run fixed, parameterized SQL on gold through the same MCP server (tenant scope, audit, error mapping). Results carry `data_until` and a `note` when days are missing (missing, never zero) or when the dataset simply has no such data (Delivery Center has no order lines nor delivery promises).
 
-The transforms are plain PySpark functions (`lakehouse/src/brigada_lakehouse/transforms.py`); the pipeline file only wires them to tables, so `tests/lakehouse` runs the same code on a local Spark: seed → export → bronze/silver/gold → the exact SQL of the tools. On the planted data, restaurant 1's last Tuesday comes out as `app` at -100% against its baseline with the other channels normal, in one call. Deployed with a Databricks Asset Bundle (`lakehouse/databricks.yml`) on the Free Edition; without the `DATABRICKS_*` settings the server and the specialists are unchanged. Step by step (Portuguese): [docs/lakehouse.md](docs/lakehouse.md).
+What profiling the real files found, and what silver does about it:
+
+| Defect in the raw data | Treatment |
+|---|---|
+| Timestamps are **UTC** (hourly volume peaks at 15h and 22h) | Converted to America/Sao_Paulo, session-zone independent; peaks move to 12h and 19h |
+| Order amounts of R$ 0 and up to R$ 1.79 million (p99.9 is R$ 1,500) | Expectation drops amounts outside (0, 5000] and counts them |
+| Cycle times of orders left open for days (p99 ≈ 45 h) | Above 240 min the delivery time is unknown (NULL); the order still counts as revenue |
+| ~20k orders with several delivery rows; distances up to 7,251 km | First completed delivery per order; only distances up to 30 km |
+| Latin-1 files, names with stray spaces, 40 channel codes | Read with the right encoding, normalized, mapped to marketplace / own channel |
+| Retail and food stores mixed | Only FOOD stores become restaurants (384 of 951) |
+
+On the full dataset: 368,999 raw orders → 321,733 in silver. Real restaurants are registered in Postgres only as a registry row (`data_source = 'lakehouse'`, migration 0010): the Postgres tools refuse them and point to the lakehouse tools instead of answering "zero sales".
+
+The transforms are plain PySpark functions (`lakehouse/src/brigada_lakehouse/`); the pipeline file only wires them to tables, so `tests/lakehouse` runs the same code on a local Spark, fed exactly like the volume: the synthetic export plus a Delivery Center extract carrying every defect above, through to the exact SQL the tools send. Gold reproduces the planted patterns (restaurant 1's app at -100% on the last Tuesday; Saturday-night deliveries ~40% over the promise). Deployed with a Databricks Asset Bundle on the Free Edition; without the `DATABRICKS_*` settings nothing changes. Step by step (Portuguese): [docs/lakehouse.md](docs/lakehouse.md).
 
 ## Stack
 
@@ -153,7 +167,7 @@ curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
 
 ## Data
 
-All restaurant data is **synthetic**, generated by `scripts/seed_data.py`. No real company or customer data is used.
+The core restaurant data is **synthetic**, generated by `scripts/seed_data.py`. The lakehouse also reads the public, anonymized [Delivery Center](https://www.kaggle.com/datasets/nosbielcs/brazilian-delivery-center) dataset from Kaggle; it is downloaded by whoever runs it and never committed here.
 
 ## Author
 

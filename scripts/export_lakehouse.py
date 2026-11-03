@@ -1,15 +1,16 @@
-"""Export the sales tables to the Databricks lakehouse (bronze input, ADR 0009).
+"""Export Brigada's synthetic tables to the Databricks lakehouse (source "brigada", ADR 0009).
 
 Writes one CSV per table and uploads it to the Unity Catalog volume the bundle creates
-(``/Volumes/<catalog>/<schema>/raw/<table>/<table>.csv``). The pipeline
-(``lakehouse/src/pipeline.py``) reads those files as its bronze layer.
+(``/Volumes/<catalog>/<schema>/raw/brigada/<table>/<table>.csv``). The pipeline
+(``lakehouse/src/pipeline.py``) reads those files as its bronze layer. The real datasets are
+uploaded as they come, by ``scripts/upload_source.py``.
 
-Only the tables the gold layer needs leave Postgres: restaurants, menu items, orders and
-order lines. Reviews stay out on purpose: they are customer-written text (prompt injection
-lives there, ADR 0002) and nothing in the lakehouse needs them yet.
+Only the tables the gold layer needs leave Postgres: restaurants, menu items, orders, order
+lines and delivery times. Reviews stay out on purpose: they are customer-written text (prompt
+injection lives there, ADR 0002) and nothing in the lakehouse needs them yet.
 
 ``created_at`` becomes ``created_at_utc``: a UTC wall clock without offset, so Spark parses
-it the same way whatever the session time zone (see ``transforms.py``).
+it the same way whatever the session time zone (see ``brigada_lakehouse/common.py``).
 
 Usage::
 
@@ -51,7 +52,9 @@ EXPORT_COLUMNS: dict[str, tuple[str, ...]] = {
     "menu_items": ("id", "restaurant_id", "name", "category", "price", "active"),
     "orders": ("id", "restaurant_id", "created_at", "total", "channel"),
     "order_items": ("order_id", "menu_item_id", "qty", "unit_price"),
+    "deliveries": ("order_id", "promised_minutes", "actual_minutes"),
 }
+SOURCE = "brigada"
 # CSV header names that differ from the Postgres column.
 RENAMED = {"created_at": "created_at_utc"}
 
@@ -108,8 +111,8 @@ def tables_from_db(database_url: str) -> dict[str, Table]:
     return out
 
 
-def volume_path(catalog: str, schema: str, table: str) -> str:
-    return f"/Volumes/{catalog}/{schema}/raw/{table}/{table}.csv"
+def volume_path(catalog: str, schema: str, table: str, source: str = SOURCE) -> str:
+    return f"/Volumes/{catalog}/{schema}/raw/{source}/{table}/{table}.csv"
 
 
 def upload(tables: dict[str, Table], catalog: str, schema: str) -> dict[str, str]:
@@ -144,7 +147,10 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--catalog", default=os.environ.get("LAKEHOUSE_CATALOG", "workspace"))
     parser.add_argument("--schema", default=os.environ.get("LAKEHOUSE_SCHEMA", "brigada"))
     parser.add_argument(
-        "--out-dir", type=Path, default=None, help="write the CSVs here and skip the upload"
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="write the CSVs here (<dir>/brigada/<table>/<table>.csv), no upload",
     )
     return parser.parse_args(argv)
 
@@ -164,7 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.out_dir is not None:
         for table, (columns, rows) in tables.items():
-            target = args.out_dir / table / f"{table}.csv"
+            target = args.out_dir / SOURCE / table / f"{table}.csv"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(to_csv(columns, rows), encoding="utf-8")
             print(f"{table}: {len(rows)} rows -> {target}")

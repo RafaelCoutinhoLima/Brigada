@@ -65,6 +65,7 @@ OPERATIONS = Specialist(
     tools=("delivery_times", "sales_by_period"),
     description="Tempos de entrega prometido vs real por dia da semana e hora; volume de "
     "pedidos por hora e canal para entender a carga da operação.",
+    lakehouse_tools=("delivery_performance",),
 )
 
 INVENTORY = Specialist(

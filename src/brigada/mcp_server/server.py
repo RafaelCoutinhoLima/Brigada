@@ -34,6 +34,9 @@ from pydantic import BaseModel, ValidationError
 from brigada.config import get_settings
 from brigada.lakehouse import queries as lakehouse_queries
 from brigada.lakehouse.models import (
+    DeliveryPerfGroupBy,
+    DeliveryPerformanceInput,
+    DeliveryPerformanceResult,
     ItemTrendsInput,
     ItemTrendsResult,
     SalesVsBaselineInput,
@@ -133,6 +136,7 @@ async def _run[I: BaseModel, O: BaseModel](fn: Callable[[Conn, I], O], inp: I) -
 
     def call() -> O:
         with connect() as conn:
+            _require_operational_data(conn, inp)
             return fn(conn, inp)
 
     try:
@@ -144,6 +148,24 @@ async def _run[I: BaseModel, O: BaseModel](fn: Callable[[Conn, I], O], inp: I) -
         # never hand them to the model.
         logger.exception("database error in %s", getattr(fn, "__name__", fn))
         raise ToolError("internal database error; the call was not completed") from None
+
+
+def _require_operational_data(conn: Conn, inp: BaseModel) -> None:
+    """A restaurant registered from a real dataset has no rows in Postgres: every Postgres tool
+    would answer "zero", which reads as a fact. Refuse and point at the lakehouse tools."""
+    restaurant_id = getattr(inp, "restaurant_id", None)
+    if restaurant_id is None:
+        return
+    row = conn.execute(
+        "SELECT data_source, lakehouse_source FROM restaurants WHERE id = %s", (restaurant_id,)
+    ).fetchone()
+    if row is not None and row["data_source"] == "lakehouse":
+        raise DomainError(
+            f"restaurant {restaurant_id} comes from the {row['lakehouse_source']} dataset, which "
+            "lives only in the lakehouse: this tool reads Brigada's operational database and "
+            "has no data for it. Use sales_vs_baseline, item_trends or delivery_performance, or "
+            "tell the owner this information is not available for this restaurant."
+        )
 
 
 def _audit_result(result: CallToolResult | InputRequiredResult) -> Any:
@@ -744,6 +766,27 @@ def _register_lakehouse(server: BrigadaMCPServer, lake: Lakehouse) -> None:
             order_by=order_by,
         )
         return await _run_lakehouse(lakehouse_queries.item_trends, inp, lake)
+
+    @server.tool(annotations=READ_ONLY)
+    async def delivery_performance(
+        restaurant_id: RestaurantId,
+        start_date: date,
+        end_date: date,
+        group_by: DeliveryPerfGroupBy = "none",
+    ) -> DeliveryPerformanceResult:
+        """Delivery time per local day, weekday, hour or weekday+hour: mean minutes from order
+        to delivery, mean promised minutes and share delivered late (when the restaurant's
+        dataset has promises), mean distance in km (when it has distances). Works for every
+        restaurant in the lakehouse, including the real datasets. Check data_until.
+        """
+        inp = _validate(
+            DeliveryPerformanceInput,
+            restaurant_id=restaurant_id,
+            start_date=start_date,
+            end_date=end_date,
+            group_by=group_by,
+        )
+        return await _run_lakehouse(lakehouse_queries.delivery_performance, inp, lake)
 
 
 def main() -> None:

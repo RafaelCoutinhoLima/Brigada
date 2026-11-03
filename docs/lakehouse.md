@@ -1,20 +1,25 @@
 # Lakehouse no Databricks Free Edition
 
-Passo a passo para colocar o lakehouse da Brigada de pé numa conta gratuita do Databricks e
-ligar as ferramentas `sales_vs_baseline` e `item_trends` no especialista de Vendas. A decisão
-e os trade-offs estão no [ADR 0009](adr/0009-lakehouse-databricks.md).
+Passo a passo para colocar o lakehouse da Brigada de pé numa conta gratuita do Databricks,
+tratar uma base real (Delivery Center) junto com os dados sintéticos e ligar as ferramentas
+`sales_vs_baseline`, `item_trends` (Vendas) e `delivery_performance` (Operações). A decisão e
+os trade-offs estão no [ADR 0009](adr/0009-lakehouse-databricks.md).
 
 ```
-Postgres ──export──► Volume (CSV) ──► bronze ──► silver ──► gold ──SQL warehouse──► MCP ──► Vendas
-          scripts/export_lakehouse.py   └──── pipeline Lakeflow (serverless) ────┘
+Postgres (sintético) ─export─┐
+                             ├─► Volume raw/<fonte>/ ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► agentes
+Kaggle (Delivery Center) ────┘                        └── pipeline Lakeflow (serverless) ──┘
 ```
 
 | Peça | Arquivo |
 |------|---------|
 | Bundle (schema, Volume, pipeline, job) | `lakehouse/databricks.yml` |
 | Pipeline (só a ligação das tabelas) | `lakehouse/src/pipeline.py` |
-| Transformações PySpark (a lógica) | `lakehouse/src/brigada_lakehouse/transforms.py` |
-| Export para o Volume | `scripts/export_lakehouse.py` |
+| Tratamento por fonte | `lakehouse/src/brigada_lakehouse/sources/` |
+| Gold (agregados) | `lakehouse/src/brigada_lakehouse/gold.py` |
+| Export do sintético | `scripts/export_lakehouse.py` |
+| Upload de base real | `scripts/upload_source.py` |
+| Cadastro dos restaurantes reais no Postgres | `scripts/register_lakehouse_restaurants.py` |
 | Ferramentas MCP (SQL fixo no gold) | `src/brigada/lakehouse/` |
 | Testes com Spark local | `tests/lakehouse/` |
 
@@ -27,9 +32,13 @@ uv sync --extra lakehouse --group spark
 uv run pytest tests/lakehouse
 ```
 
-Esses testes geram o seed, exportam em CSV, rodam bronze, silver e gold num Spark local e
-executam o SQL exato das ferramentas por cima do gold. Se passam aqui, o que sobra para o
-Databricks é configuração.
+Esses testes geram o seed e um recorte do Delivery Center com os defeitos da base real, rodam
+bronze, silver e gold num Spark local e executam o SQL exato das ferramentas por cima do gold.
+Com a base real baixada (passo 4), dá para rodar o pipeline inteiro sobre ela:
+
+```bash
+DELIVERY_CENTER_DIR=~/Downloads/delivery-center uv run pytest tests/lakehouse -k real -s
+```
 
 ## 1. Criar a conta
 
@@ -72,22 +81,28 @@ Isso cria, no catálogo `workspace`:
 Outro catálogo ou schema: `databricks bundle deploy --var catalog=X --var schema=Y` (e as
 mesmas variáveis `LAKEHOUSE_CATALOG` / `LAKEHOUSE_SCHEMA` no `.env`).
 
-## 4. Exportar os dados para o Volume
+## 4. Subir os dados para o Volume
 
-Na raiz do repositório:
+Na raiz do repositório, `uv sync --extra lakehouse` e depois as duas fontes.
+
+**Sintético** (o mesmo dado que o servidor MCP lê do Postgres):
 
 ```bash
-uv sync --extra lakehouse
-
-# do seu Postgres (o mesmo dado que o servidor MCP lê)
-uv run python scripts/export_lakehouse.py
-
-# ou direto do gerador, sem banco
-uv run python scripts/export_lakehouse.py --source seed --end-date 2026-10-27
+uv run python scripts/export_lakehouse.py                     # do Postgres
+uv run python scripts/export_lakehouse.py --source seed --end-date 2026-10-27   # sem banco
 ```
 
-Cada tabela vira `/Volumes/workspace/brigada/raw/<tabela>/<tabela>.csv`. Rodar de novo
-substitui os arquivos.
+**Delivery Center** (base real, 369 mil pedidos de jan a abr de 2021):
+
+1. Baixe em <https://www.kaggle.com/datasets/nosbielcs/brazilian-delivery-center> e descompacte.
+2. Suba os arquivos como vieram (o tratamento é do pipeline):
+
+```bash
+uv run python scripts/upload_source.py delivery_center ~/Downloads/delivery-center
+```
+
+Tudo vai para `/Volumes/workspace/brigada/raw/<fonte>/<tabela>/`. Rodar de novo substitui os
+arquivos. Os dados não entram no repositório.
 
 ## 5. Rodar o pipeline
 
@@ -110,7 +125,18 @@ ORDER BY channel;
 ```
 
 O canal `app` deve vir com 0 pedidos e `revenue_change_pct = -100`: é a queda plantada no
-restaurante 1.
+restaurante 1. Para ver os restaurantes reais:
+
+```sql
+SELECT restaurant_id, name, city, completed_orders, data_from, data_until
+FROM workspace.brigada.gold_restaurants
+WHERE source = 'delivery_center'
+ORDER BY completed_orders DESC LIMIT 10;
+```
+
+Para olhar o tratamento, abra `silver_delivery_center_orders` no grafo do pipeline: a aba de
+qualidade mostra quantos pedidos cada expectativa descartou (valor zerado ou absurdo, data
+impossível, canal desconhecido).
 
 ## 6. Ligar as ferramentas na Brigada
 
@@ -127,17 +153,36 @@ DATABRICKS_TOKEN=dapi...
 TOOL_TIMEOUT_SECONDS=60
 ```
 
-Com os três valores preenchidos, o servidor MCP registra `sales_vs_baseline` e `item_trends`
-e o especialista de Vendas passa a recebê-las. Com qualquer um vazio, tudo fica como antes.
+Com os três valores preenchidos, o servidor MCP registra `sales_vs_baseline`, `item_trends` e
+`delivery_performance`, e os especialistas de Vendas e Operações passam a recebê-las. Com
+qualquer um vazio, tudo fica como antes.
 
-4. Teste:
+4. Cadastre os restaurantes reais no Postgres (runs e chaves de API precisam do id). Antes,
+   aplique a migration `db/migrations/0010_restaurant_data_source.sql`:
 
 ```bash
+uv run python scripts/register_lakehouse_restaurants.py --min-orders 500 --dry-run
+uv run python scripts/register_lakehouse_restaurants.py --min-orders 500
+```
+
+   O id de uma loja do Delivery Center é `1000000 + store_id` (a loja 53 vira `1000053`).
+   Para o console, inclua os ids na chave: `API_KEYS=dev-key=1,2,3,1000053`.
+
+5. Teste:
+
+```bash
+# sintético
 uv run python -m brigada.runtime "Por que minhas vendas caíram na última terça?" \
   --restaurant 1 --today 2026-10-28
-uv run python -m brigada.runtime "Qual prato vendeu menos essa semana?" \
-  --restaurant 2 --today 2026-10-28
+# real: a base vai até 30/04/2021, então "hoje" precisa estar logo depois
+uv run python -m brigada.orchestration "Como foram minhas vendas em abril e onde a entrega demora mais?" \
+  --restaurant 1000053 --today 2021-05-01
 ```
+
+Nos restaurantes reais, as ferramentas do Postgres respondem que o restaurante só existe no
+lakehouse, e os agentes usam as do lakehouse. Perguntas que a base não responde (que prato
+vendeu mais, avaliações, tempo prometido) recebem um "essa informação não existe para este
+restaurante", não um número inventado.
 
 No console (`/console`), o especialista de Vendas mostra as duas ferramentas novas.
 
@@ -146,10 +191,11 @@ No console (`/console`), o especialista de Vendas mostra as duas ferramentas nov
 | Sintoma | Causa provável |
 |---------|----------------|
 | `bundle deploy` reclama do catálogo | O catálogo não se chama `workspace`: veja em **Catalog** e passe `--var catalog=...` |
-| Pipeline falha em `bronze_*` com "path does not exist" | O export (passo 4) ainda não rodou, ou foi para outro catálogo/schema |
+| Pipeline falha em `bronze_*` com "path does not exist" | O export ou o upload (passo 4) daquela fonte não rodou. Para construir só uma fonte: `--var sources=brigada` |
 | A ferramenta responde "lakehouse query failed" | Warehouse parado ou token vencido; o detalhe está no log do servidor MCP |
 | `note` diz que o lakehouse só tem dados até um dia anterior | Faltou exportar e rodar o job depois do último seed |
 | Timeout na primeira pergunta | Warehouse ligando: aumente `TOOL_TIMEOUT_SECONDS` |
 
-O Free Edition não pode ser usado para fins comerciais. Aqui o dado é todo sintético, gerado
-por `scripts/seed_data.py`.
+O Free Edition não pode ser usado para fins comerciais. O dado sintético é gerado por
+`scripts/seed_data.py`; o Delivery Center é público no Kaggle, anonimizado pelos autores, e fica
+fora do repositório.

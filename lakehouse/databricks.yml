@@ -2,7 +2,8 @@
 #
 #   cd lakehouse
 #   databricks bundle deploy              # schema, raw volume, pipeline and refresh job
-#   uv run --extra lakehouse python ../scripts/export_lakehouse.py   # CSVs -> raw volume
+#   uv run --extra lakehouse python ../scripts/export_lakehouse.py   # synthetic -> raw volume
+#   uv run --extra lakehouse python ../scripts/upload_source.py delivery_center <dir>
 #   databricks bundle run brigada_refresh # bronze -> silver -> gold
 #
 # Made for Databricks Free Edition: serverless only, Unity Catalog catalog "workspace".
@@ -18,6 +19,12 @@ variables:
   schema:
     description: Schema for every Brigada table and the raw volume.
     default: brigada
+  sources:
+    description: >-
+      Comma-separated sources to build. "brigada" is the synthetic data
+      (scripts/export_lakehouse.py); "delivery_center" is the Kaggle dataset
+      (scripts/upload_source.py). Each needs its files in the raw volume.
+    default: brigada,delivery_center
 
 resources:
   schemas:
@@ -32,7 +39,7 @@ resources:
       schema_name: ${resources.schemas.brigada.name}
       name: raw
       volume_type: MANAGED
-      comment: CSV files uploaded by scripts/export_lakehouse.py (one folder per table).
+      comment: Raw CSV files, one folder per source and table (<source>/<table>/).
 
   pipelines:
     brigada_medallion:
@@ -47,6 +54,7 @@ resources:
       configuration:
         bundle.sourcePath: ${workspace.file_path}/src
         brigada.raw_path: /Volumes/${var.catalog}/${var.schema}/raw
+        brigada.sources: ${var.sources}
 
   jobs:
     brigada_refresh:

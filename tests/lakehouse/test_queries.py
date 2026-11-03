@@ -11,7 +11,11 @@ from pydantic import ValidationError
 
 from brigada.config import Settings
 from brigada.lakehouse import queries
-from brigada.lakehouse.models import ItemTrendsInput, SalesVsBaselineInput
+from brigada.lakehouse.models import (
+    DeliveryPerformanceInput,
+    ItemTrendsInput,
+    SalesVsBaselineInput,
+)
 from brigada.lakehouse.queries import GoldTables
 from brigada.lakehouse.warehouse import Lakehouse, from_settings
 from brigada.mcp_server.server import build_server
@@ -23,16 +27,25 @@ DAY = date(2026, 10, 27)
 
 
 class FakeWarehouse:
-    """Answers the coverage query and the main query with canned rows; records every call."""
+    """Answers the coverage query (gold_restaurants) and the main query with canned rows;
+    records every call."""
 
-    def __init__(self, rows: list[dict[str, Any]], data_from: date | None, until: date | None):
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        data_from: date | None,
+        until: date | None,
+        source: str = "brigada",
+    ):
         self.rows = rows
-        self.coverage = [{"data_from": data_from, "data_until": until}]
+        self.coverage = (
+            [{"source": source, "data_from": data_from, "data_until": until}] if until else []
+        )
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def __call__(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         self.calls.append((sql, params))
-        return self.coverage if "max(day) AS data_until" in sql else self.rows
+        return self.coverage if "`gold_restaurants`" in sql else self.rows
 
 
 def _channel(channel: str, revenue: float, baseline: float | None, weeks: int = 4) -> dict:
@@ -41,6 +54,7 @@ def _channel(channel: str, revenue: float, baseline: float | None, weeks: int = 
         "channel": channel,
         "orders": int(revenue // 50),
         "revenue": revenue,
+        "canceled_orders": 1 if channel == "app" else 0,
         "baseline_weeks": weeks,
         "baseline_orders": None if baseline is None else baseline / 50,
         "baseline_revenue": baseline,
@@ -49,7 +63,11 @@ def _channel(channel: str, revenue: float, baseline: float | None, weeks: int = 
 
 def test_sales_vs_baseline_totals_the_channels_and_binds_every_value() -> None:
     fetch = FakeWarehouse(
-        [_channel("app", 0.0, 1200.0), _channel("balcao", 300.0, 280.0)],
+        [
+            _channel("balcao", 300.0, 280.0),
+            _channel("app", 0.0, 1200.0),
+            _channel("telefone", 0.0, 0.0),  # gold is zero-filled: every channel has a row
+        ],
         date(2026, 7, 30),
         DAY,
     )
@@ -61,12 +79,14 @@ def test_sales_vs_baseline_totals_the_channels_and_binds_every_value() -> None:
     assert [c.channel for c in day.channels] == ["app", "telefone", "balcao"]
     app, telefone, _ = day.channels
     assert app.revenue_change_pct == -100.0
-    assert telefone.orders == 0 and telefone.baseline_revenue is None  # missing row: zero
+    assert telefone.orders == 0 and telefone.baseline_revenue == 0.0
     assert day.revenue == 300.0 and day.baseline_revenue == 1480.0
     assert day.revenue_change_pct == -79.7
     assert result.note is None
+    assert day.canceled_orders == 1 and result.data_source == "brigada"
+    main_sql, params = fetch.calls[0]
+    assert "`workspace`.`brigada`.`gold_daily_channel_sales`" in main_sql
     for sql, params in fetch.calls:
-        assert "`workspace`.`brigada`.`gold_daily_channel_sales`" in sql
         assert "2026-10-27" not in sql and params["restaurant_id"] == 1  # bound, not inlined
 
 
@@ -149,7 +169,7 @@ def _lake(fetch: FakeWarehouse) -> Lakehouse:
     return Lakehouse(open=open_fetch, tables=TABLES)
 
 
-LAKEHOUSE_TOOLS = ("sales_vs_baseline", "item_trends")
+LAKEHOUSE_TOOLS = ("sales_vs_baseline", "item_trends", "delivery_performance")
 
 
 def test_tools_are_absent_without_configuration() -> None:
@@ -189,7 +209,8 @@ def test_sales_specialist_and_child_get_the_lakehouse_when_configured(
     )
     monkeypatch.setattr(specialists, "get_settings", lambda: configured)
     monkeypatch.setattr("brigada.runtime.mcp_tools.get_settings", lambda: configured)
-    assert specialists.SALES.available_tools()[-2:] == LAKEHOUSE_TOOLS
+    assert specialists.SALES.available_tools()[-2:] == LAKEHOUSE_TOOLS[:2]
+    assert specialists.OPERATIONS.available_tools()[-1] == "delivery_performance"
     assert specialists.MENU.available_tools() == specialists.MENU.tools
     env = stdio_server().env or {}
     assert env["DATABRICKS_TOKEN"] == "dapi-secret"
@@ -223,3 +244,64 @@ async def test_tool_returns_the_query_result() -> None:
     assert tool is not None
     result = await tool.fn(restaurant_id=1, start_date=DAY, end_date=DAY)
     assert result.days[0].channels[0].revenue_change_pct == -100.0
+
+
+def test_item_trends_says_when_the_dataset_has_no_order_lines() -> None:
+    fetch = FakeWarehouse([], date(2021, 1, 1), date(2021, 4, 30), source="delivery_center")
+    inp = ItemTrendsInput(restaurant_id=1_000_053, end_date=date(2021, 4, 30))
+    result = queries.item_trends(fetch, inp, TABLES)
+    assert result.items == [] and result.data_source == "delivery_center"
+    assert result.note is not None and "no order lines" in result.note
+
+
+def _hourly(
+    k: str, n: int, minutes: float, promised: float, p_n: int, late: int, km: float, km_n: int
+) -> dict:
+    return {
+        "k": k,
+        "delivered_orders": n,
+        "delivery_minutes_sum": minutes,
+        "promised_minutes_sum": promised,
+        "promised_count": p_n,
+        "late_orders": late,
+        "distance_km_sum": km,
+        "distance_count": km_n,
+    }
+
+
+def test_delivery_performance_averages_sums_and_sorts_by_calendar() -> None:
+    rows = [
+        _hourly("6 20", 10, 500.0, 400.0, 10, 8, 0.0, 0),  # saturday 20h
+        _hourly("1 12", 4, 120.0, 160.0, 4, 0, 0.0, 0),  # monday 12h
+        _hourly("6 9", 2, 60.0, 60.0, 2, 1, 0.0, 0),  # saturday 9h: before 20h
+    ]
+    fetch = FakeWarehouse(rows, date(2026, 7, 30), DAY)
+    inp = DeliveryPerformanceInput(
+        restaurant_id=3, start_date=date(2026, 10, 1), end_date=DAY, group_by="weekday_hour"
+    )
+    result = queries.delivery_performance(fetch, inp, TABLES)
+    assert [g.key for g in result.groups] == ["monday 12", "saturday 9", "saturday 20"]
+    sat = result.groups[-1]
+    assert sat.mean_delivery_minutes == 50.0 and sat.mean_promised_minutes == 40.0
+    assert sat.late_share == 0.8 and sat.mean_distance_km is None
+    assert result.overall is not None and result.overall.delivered_orders == 16
+    assert result.overall.mean_delivery_minutes == 42.5
+    assert result.overall.late_share == 0.562
+    sql, _ = fetch.calls[0]
+    assert "concat(CAST(iso_weekday AS STRING)" in sql and "GROUP BY k" in sql
+
+
+def test_delivery_performance_without_promises_or_deliveries() -> None:
+    rows = [_hourly("all", 3, 120.0, 0.0, 0, 0, 6.0, 3)]
+    fetch = FakeWarehouse(rows, date(2021, 1, 1), date(2021, 4, 30), source="delivery_center")
+    inp = DeliveryPerformanceInput(
+        restaurant_id=1_000_053, start_date=date(2021, 4, 1), end_date=date(2021, 4, 30)
+    )
+    result = queries.delivery_performance(fetch, inp, TABLES)
+    assert result.groups == []
+    assert result.overall is not None
+    assert result.overall.mean_promised_minutes is None and result.overall.late_share is None
+    assert result.overall.mean_distance_km == 2.0
+
+    empty = queries.delivery_performance(FakeWarehouse([], None, None), inp, TABLES)
+    assert empty.overall is None and "no data" in (empty.note or "")
