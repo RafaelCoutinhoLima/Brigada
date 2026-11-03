@@ -1,0 +1,62 @@
+# Databricks Asset Bundle for the Brigada lakehouse (ADR 0009, guide in docs/lakehouse.md).
+#
+#   cd lakehouse
+#   databricks bundle deploy              # schema, raw volume, pipeline and refresh job
+#   uv run --extra lakehouse python ../scripts/export_lakehouse.py   # CSVs -> raw volume
+#   databricks bundle run brigada_refresh # bronze -> silver -> gold
+#
+# Made for Databricks Free Edition: serverless only, Unity Catalog catalog "workspace".
+# Authentication comes from the CLI (`databricks auth login`) or DATABRICKS_HOST/TOKEN.
+
+bundle:
+  name: brigada_lakehouse
+
+variables:
+  catalog:
+    description: Unity Catalog catalog. Free Edition creates one called "workspace".
+    default: workspace
+  schema:
+    description: Schema for every Brigada table and the raw volume.
+    default: brigada
+
+resources:
+  schemas:
+    brigada:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: Brigada lakehouse. Synthetic restaurant data from scripts/seed_data.py.
+
+  volumes:
+    raw:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.brigada.name}
+      name: raw
+      volume_type: MANAGED
+      comment: CSV files uploaded by scripts/export_lakehouse.py (one folder per table).
+
+  pipelines:
+    brigada_medallion:
+      name: brigada_medallion
+      catalog: ${var.catalog}
+      schema: ${resources.schemas.brigada.name}
+      serverless: true
+      channel: CURRENT
+      libraries:
+        - notebook:
+            path: ./src/pipeline.py
+      configuration:
+        bundle.sourcePath: ${workspace.file_path}/src
+        brigada.raw_path: /Volumes/${var.catalog}/${var.schema}/raw
+
+  jobs:
+    brigada_refresh:
+      name: brigada_refresh
+      tasks:
+        - task_key: refresh_medallion
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.brigada_medallion.id}
+            full_refresh: true
+
+targets:
+  dev:
+    default: true

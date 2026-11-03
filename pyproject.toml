@@ -18,8 +18,15 @@ dependencies = [
   "opentelemetry-exporter-otlp-proto-http>=1.45.1",
 ]
 
+[project.optional-dependencies]
+# Databricks lakehouse (lakehouse/, ADR 0009): the MCP tools query a SQL warehouse and
+# scripts/export_lakehouse.py uploads the raw tables to a Unity Catalog volume.
+lakehouse = ["databricks-sql-connector>=4.0", "databricks-sdk>=0.40"]
+
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "faker>=28"]
+# Local Spark to test the pipeline transforms (tests/lakehouse); needs Java 17+.
+spark = ["pyspark>=4.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -39,6 +46,9 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "lakehouse/src"]
 addopts = "-m 'not db'"
-markers = ["db: requires a running Postgres (DATABASE_URL)"]
+markers = [
+  "db: requires a running Postgres (DATABASE_URL)",
+  "spark: requires pyspark and Java (uv sync --group spark)",
+]

@@ -35,6 +35,8 @@ Frameworks hide the parts that matter in production: the tool-use loop, retries,
                └──────────────┘
 ```
 
+Optional analytical layer: a Databricks lakehouse (medallion pipeline, serverless) whose gold tables two extra read tools query through a SQL warehouse ([Lakehouse](#lakehouse-databricks)).
+
 Cross-cutting: model router (ML classifier), guardrails, OpenTelemetry tracing, eval suite (harness and security tests run in CI; live model runs on demand).
 
 Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -51,6 +53,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, versioned prompts, regression gate against a baseline (`--fail-under-baseline`); LLM-as-judge planned |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
+| 9 | Lakehouse (Databricks) | Medallion pipeline (Lakeflow Declarative Pipelines, Asset Bundle, data quality expectations) feeding two fixed-SQL MCP tools; off unless configured |
 
 ## Results
 
@@ -97,9 +100,25 @@ Can a classifier send the easy questions to the cheap model? The same 62 cases w
 
 The classifier finds no signal: out-of-fold ROC AUC 0.43 (range 0.31–0.51, 0.5 is chance), and in no repeat did it send any of the 8 fast failures to the strong model. Routed ends up equal to always-fast. With 8 negatives, one pass/fail draw per question and model from free models that are noisy between runs, and runs made at different commits (the review search tool and two prompt fixes landed in between), the gap between always-strong and always-fast (56 vs 54 passed) is inside the confidence intervals, and the oracle's 98% is the best of two noisy draws rather than a reachable target. So the router ships **off** (`ROUTER_ENABLED=false`): on this data the cheap model alone is the honest baseline to beat, and more labeled runs per question are needed before routing can.
 
+## Lakehouse (Databricks)
+
+Two questions kept costing the sales specialist several calls and a comparison done by the model: *"why did sales drop on Tuesday?"* (split by channel, compare with the same weekday before) and *"which dish sold less this week?"* (two `top_items` lists to cross, and a dish that stopped selling just disappears). Both are historical aggregates, so they now live in a lakehouse ([ADR 0009](docs/adr/0009-lakehouse-databricks.md)):
+
+```
+Postgres ─export─► UC volume (CSV) ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► Sales
+                                      └─ Lakeflow Declarative Pipeline, serverless ─┘
+```
+
+- **bronze**: the exported CSV as read, plus source file and read time. Reviews never leave Postgres (customer text).
+- **silver**: typed with `try_cast`, deduplicated, `expect_all_or_drop` rules (known channel, non-negative totals, positive quantities); local day and hour computed once (America/Sao_Paulo, independent of the Spark session time zone).
+- **gold**: `gold_daily_channel_sales` (day × channel, zero-filled, next to the mean of the same weekday over the previous 4 weeks) and `gold_item_daily_sales` (day × dish, zero-filled over every dish).
+- **tools**: `sales_vs_baseline` and `item_trends` run fixed, parameterized SQL on the gold tables, through the same MCP server (tenant scope, audit, error mapping). Every result carries `data_until`, and a `note` when the requested days are not in the lakehouse yet: missing, never zero.
+
+The transforms are plain PySpark functions (`lakehouse/src/brigada_lakehouse/transforms.py`); the pipeline file only wires them to tables, so `tests/lakehouse` runs the same code on a local Spark: seed → export → bronze/silver/gold → the exact SQL of the tools. On the planted data, restaurant 1's last Tuesday comes out as `app` at -100% against its baseline with the other channels normal, in one call. Deployed with a Databricks Asset Bundle (`lakehouse/databricks.yml`) on the Free Edition; without the `DATABRICKS_*` settings the server and the specialists are unchanged. Step by step (Portuguese): [docs/lakehouse.md](docs/lakehouse.md).
+
 ## Stack
 
-Python 3.12 · FastAPI · Anthropic SDK (no agent framework) · OpenRouter adapter · MCP Python SDK · Postgres + pgvector · scikit-learn · OpenTelemetry · GitHub Actions · Docker
+Python 3.12 · FastAPI · Anthropic SDK (no agent framework) · OpenRouter adapter · MCP Python SDK · Postgres + pgvector · Databricks (Lakeflow Declarative Pipelines, Unity Catalog, SQL warehouse, Asset Bundles) · PySpark · scikit-learn · OpenTelemetry · GitHub Actions · Docker
 
 ## Running locally
 

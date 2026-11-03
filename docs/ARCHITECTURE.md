@@ -37,6 +37,7 @@ Messages shape (`runtime/openrouter.py`, ADR 0004), selected by `MODEL_PROVIDER`
 | MCP server | `src/brigada/mcp_server` | Read/write tools, human confirmation, audit log |
 | RAG | `src/brigada/rag` | Review search: Portuguese full-text, embeddings (OpenRouter), RRF fusion; index coverage reported to the caller; indexing in `rag/indexing.py` + `scripts/index_reviews.py` |
 | Router | `src/brigada/router` | Fast-vs-strong classifier (`train.py`: out-of-fold evaluation and routing simulation) and `choose_model` |
+| Lakehouse | `lakehouse/`, `src/brigada/lakehouse` | Databricks medallion pipeline (bundle, PySpark transforms) and the fixed-SQL reads behind `sales_vs_baseline` / `item_trends`; registered only when configured. See ADR 0009 and `docs/lakehouse.md` |
 | Observability | `src/brigada/observability` | OpenTelemetry setup, cost accounting |
 | API | `src/brigada/api` | FastAPI routes; `/console` live view of each specialist's runs |
 | Evals | `evals/` | Cases, metrics, judge (planned), regression gate against a baseline |
@@ -62,6 +63,18 @@ steps(id, run_id, step, kind, payload jsonb, tokens_in, tokens_out, cost_usd, la
 tool_audit(id, run_id, tool, args jsonb, result jsonb, error, approved_by, created_at)
 pending_actions(id, run_id, tool, restaurant_id, payload jsonb, status, decided_by, ...)
 promotions(id, restaurant_id, menu_item_id, discount_pct, start_date, end_date, ...)
+```
+
+Lakehouse (Databricks, Unity Catalog `<catalog>.<schema>`), rebuilt from an export of the
+tables above (no reviews):
+
+```
+bronze_{restaurants,menu_items,orders,order_items}   raw CSV, all strings
+silver_*                                             typed, deduplicated, expectations
+gold_daily_channel_sales(restaurant_id, day, iso_weekday, channel, orders, revenue,
+     baseline_weeks, baseline_orders, baseline_revenue, revenue_change_pct)
+gold_item_daily_sales(restaurant_id, day, menu_item_id, item_name, category, active,
+     qty, revenue, orders)
 ```
 
 ## Threat model (summary)
