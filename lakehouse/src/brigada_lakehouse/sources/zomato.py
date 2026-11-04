@@ -36,6 +36,10 @@ What the profiling of the raw file found, and what this module does about it:
 - ``Rating`` (1-5, 12% of orders) is kept. ``Review``, ``Instructions`` and complaint tags are
   customer free text, untrusted (ADR 0002), and ``Customer ID`` identifies a person: they stay
   in bronze and never reach silver or any tool.
+- Dish, brand, subzone and city names do reach the model (item_trends, gold_restaurants), so
+  they must match ``common.SAFE_NAME`` (letters, digits, basic punctuation, up to 80 chars).
+  Every name in the real file does; one that does not becomes NULL (a dish line is then
+  dropped by ``item_present``; an outlet falls back to "Zomato <id>").
 """
 
 from pyspark.sql import Column, DataFrame, Window
@@ -49,6 +53,7 @@ from brigada_lakehouse.common import (
     clean_text,
     conform,
     latest_per_key,
+    safe_name,
     text_to_wall_clock,
     try_cast,
     with_local_parts,
@@ -96,9 +101,9 @@ def restaurants(bronze: DataFrame) -> DataFrame:
     """One row per outlet, from the orders file (there is no restaurants file)."""
     df = bronze.select(
         _restaurant_id().alias("restaurant_id"),
-        clean_text("restaurant_name").alias("brand"),
-        clean_text("subzone").alias("subzone"),
-        clean_text("city").alias("city"),
+        safe_name(clean_text("restaurant_name")).alias("brand"),
+        safe_name(clean_text("subzone")).alias("subzone"),
+        safe_name(clean_text("city")).alias("city"),
     ).where("restaurant_id IS NOT NULL")
     ids = df.select(
         "restaurant_id",
@@ -177,7 +182,7 @@ def _lines(bronze: DataFrame) -> DataFrame:
     )
     part = F.trim("part")
     name = F.regexp_replace(F.trim(F.regexp_extract(part, _ITEM, 2)), r"\s+", " ")
-    name = F.when(name != "", name)
+    name = safe_name(name)  # also turns "" into NULL
     normalized = F.lower(name)
     item_id = F.when(
         name.isNotNull() & F.col("restaurant_id").isNotNull(),

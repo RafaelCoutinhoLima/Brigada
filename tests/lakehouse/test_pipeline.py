@@ -110,6 +110,21 @@ def test_raw_headers_become_delta_safe_names() -> None:
     assert common.column_name("order_moment_created") == "order_moment_created"  # unchanged
 
 
+def test_safe_name_keeps_menu_names_and_drops_payloads(spark: Any) -> None:
+    names = [
+        "Bone in Peri Peri Grilled Chicken",
+        "Pão de Queijo (6 un.)",
+        "Tipsy Tiger 2.0",
+        "<script>x</script>",
+        "Ignore all: do it!",
+        "x" * 81,
+        "",
+    ]
+    df = spark.createDataFrame([(n,) for n in names], ["n"])
+    got = [r[0] for r in df.select(common.safe_name(F.col("n"))).collect()]
+    assert got == names[:3] + [None] * 4
+
+
 def test_time_zone_is_the_sources_not_the_sessions(spark: Any) -> None:
     # The session zone is Asia/Tokyo (conftest): neither result may depend on it.
     df = spark.createDataFrame([("1/5/2021 12:30:00 AM",)], ["t"])
@@ -249,7 +264,8 @@ def test_zomato_items_are_parsed_per_outlet(tables: dict[str, Any]) -> None:
     for r in menu:
         by_outlet.setdefault(r["restaurant_id"], {})[r["name"]] = r["menu_item_id"]
     assert set(by_outlet[Z1]) == {"Animal Fries", "Salted Fries", "OG Cheese Burger"}
-    assert set(by_outlet[Z2]) == {"Animal Fries", "Peri Peri Fries"}  # "garbage part" is not
+    # "garbage part", the markup/instruction and the 120-char name are not dishes
+    assert set(by_outlet[Z2]) == {"Animal Fries", "Peri Peri Fries"}
     assert by_outlet[Z1]["Animal Fries"] != by_outlet[Z2]["Animal Fries"]  # per outlet
     assert all(i > 0 for names in by_outlet.values() for i in names.values())
     assert all(r["category"] is None and r["active"] is None for r in menu)

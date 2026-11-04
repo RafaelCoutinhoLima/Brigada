@@ -120,6 +120,18 @@ def clean_text(column: str) -> Column:
     return F.when(text == "", None).otherwise(text)
 
 
+# Names that reach the model through the tools (dishes, restaurants) come from external files.
+# Letters of any script, digits, spaces and basic punctuation, up to 80 characters: no markup,
+# no long payloads. Anything else becomes NULL and the expectations drop and count the row.
+SAFE_NAME = r"^[\p{L}\p{N} &'()+./-]{1,80}$"
+
+
+def safe_name(name: Column) -> Column:
+    """``name`` when it matches ``SAFE_NAME``, else NULL. Shrinks what an external file can put
+    in front of the model; it does not make the text trusted (words can still be words)."""
+    return F.when(name.rlike(SAFE_NAME), name)
+
+
 def text_to_wall_clock(column: str, fmt: str) -> Column:
     """A timestamp written as text in ``fmt`` -> the same wall clock as TIMESTAMP_NTZ, whatever
     the session zone. Malformed or impossible values (2/30, 25:61) become NULL.
