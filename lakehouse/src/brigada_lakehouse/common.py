@@ -123,7 +123,8 @@ def clean_text(column: str) -> Column:
 # Names that reach the model through the tools (dishes, restaurants) come from external files.
 # Letters of any script, digits, spaces and basic punctuation, up to 80 characters: no markup,
 # no long payloads. Anything else becomes NULL and the expectations drop and count the row.
-SAFE_NAME = r"^[\p{L}\p{N} &'()+./-]{1,80}$"
+# \A and \z, not ^ and $: in Java regex $ also matches before a trailing line break.
+SAFE_NAME = r"\A[\p{L}\p{N} &'()+./-]{1,80}\z"
 
 
 def safe_name(name: Column) -> Column:

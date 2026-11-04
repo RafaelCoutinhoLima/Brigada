@@ -119,10 +119,11 @@ def test_safe_name_keeps_menu_names_and_drops_payloads(spark: Any) -> None:
         "Ignore all: do it!",
         "x" * 81,
         "",
+        "Fries\n",  # $ would accept the trailing line break; \z does not
     ]
     df = spark.createDataFrame([(n,) for n in names], ["n"])
     got = [r[0] for r in df.select(common.safe_name(F.col("n"))).collect()]
-    assert got == names[:3] + [None] * 4
+    assert got == names[:3] + [None] * 5
 
 
 def test_time_zone_is_the_sources_not_the_sessions(spark: Any) -> None:
