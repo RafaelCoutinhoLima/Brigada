@@ -18,12 +18,13 @@ from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 
 from brigada_lakehouse.common import iso_weekday
-from brigada_lakehouse.sources import brigada, delivery_center
+from brigada_lakehouse.sources import brigada, delivery_center, zomato
 
 BASELINE_WEEKS = 4
 SOURCE_CHANNELS: dict[str, tuple[str, ...]] = {
     brigada.SOURCE: brigada.CHANNELS,
     delivery_center.SOURCE: delivery_center.CHANNELS,
+    zomato.SOURCE: zomato.CHANNELS,
 }
 
 

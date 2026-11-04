@@ -6,7 +6,7 @@
 # (tests/lakehouse). Deployed by the bundle in lakehouse/databricks.yml, which sets:
 #   bundle.sourcePath -> this folder, so the brigada_lakehouse package can be imported
 #   brigada.raw_path  -> the Unity Catalog volume the raw files are uploaded to
-#   brigada.sources   -> which sources to build ("brigada,delivery_center")
+#   brigada.sources   -> which sources to build ("brigada,delivery_center,zomato")
 #
 # bronze_<source>_<table>  raw CSV as uploaded, every column a string, + source file, read time
 # silver_<source>_*        typed, cleaned, mapped to the conformed contract, expectations
@@ -21,7 +21,7 @@ from pyspark.sql import DataFrame
 sys.path.append(spark.conf.get("bundle.sourcePath", "."))  # noqa: F821 (Databricks global)
 
 from brigada_lakehouse import build, common, gold  # noqa: E402
-from brigada_lakehouse.sources import brigada, delivery_center  # noqa: E402
+from brigada_lakehouse.sources import brigada, delivery_center, zomato  # noqa: E402
 
 RAW_PATH = spark.conf.get("brigada.raw_path")  # noqa: F821
 SOURCES = [s.strip() for s in spark.conf.get("brigada.sources", "brigada").split(",") if s]  # noqa: F821
@@ -87,6 +87,30 @@ if delivery_center.SOURCE in SOURCES:
             dlt.read("bronze_delivery_center_channels"),
             dlt.read("bronze_delivery_center_deliveries"),
             dlt.read("silver_delivery_center_restaurants"),
+        )
+
+
+if zomato.SOURCE in SOURCES:
+
+    @dlt.table(comment="Zomato outlets (Delhi NCR) as restaurants (conformed).")
+    def silver_zomato_restaurants() -> DataFrame:
+        return zomato.restaurants(dlt.read("bronze_zomato_orders"))
+
+    @dlt.table(comment="Zomato dishes ever ordered, per outlet; no prices or categories.")
+    @dlt.expect_all_or_drop(common.MENU_ITEM_EXPECTATIONS)
+    def silver_zomato_menu_items() -> DataFrame:
+        return zomato.menu_items(dlt.read("bronze_zomato_orders"))
+
+    @dlt.table(comment="Zomato orders, India local time, rupees; no review text (conformed).")
+    @dlt.expect_all_or_drop({**common.ORDER_EXPECTATIONS, **zomato.ORDER_EXPECTATIONS})
+    def silver_zomato_orders() -> DataFrame:
+        return zomato.orders(dlt.read("bronze_zomato_orders"))
+
+    @dlt.table(comment="Zomato order lines parsed from 'Items in order'; price unknown (NULL).")
+    @dlt.expect_all_or_drop(common.ORDER_ITEM_EXPECTATIONS)
+    def silver_zomato_order_items() -> DataFrame:
+        return zomato.order_items(
+            dlt.read("bronze_zomato_orders"), dlt.read("silver_zomato_orders")
         )
 
 

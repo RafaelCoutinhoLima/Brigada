@@ -120,3 +120,50 @@ def test_stale_end_date_is_flagged(fetch: queries.Fetch) -> None:
     result = queries.sales_vs_baseline(fetch, inp, TABLES)
     assert [d.day for d in result.days] == [END]
     assert result.note is not None and END.isoformat() in result.note
+
+
+ZOMATO_SWAAD = 120_320_607
+
+
+def test_zomato_restaurant_through_the_same_tools(fetch: queries.Fetch) -> None:
+    sales = queries.sales_vs_baseline(
+        fetch,
+        SalesVsBaselineInput(
+            restaurant_id=ZOMATO_SWAAD, start_date=date(2024, 9, 10), end_date=date(2024, 9, 11)
+        ),
+        TABLES,
+    )
+    assert sales.data_source == "zomato" and sales.currency == "INR" and sales.note is None
+    first, second = sales.days
+    assert [c.channel for c in second.channels] == ["zomato_delivery"]
+    assert first.revenue == 666.75  # 23:38 India time stays on 9/10
+    assert second.revenue == 300.0 and second.canceled_orders == 2  # 00:13 goes to 9/11
+
+    items = queries.item_trends(
+        fetch,
+        ItemTrendsInput(restaurant_id=ZOMATO_SWAAD, end_date=date(2024, 9, 11), days=1),
+        TABLES,
+    )
+    assert items.currency == "INR" and "no item prices" in (items.note or "")
+    by_name = {i.name: i for i in items.items}
+    assert by_name["OG Cheese Burger"].qty_current == 2
+    assert by_name["Salted Fries"].qty_previous == 2 and by_name["Salted Fries"].qty_change == -2
+    assert all(i.revenue_current is None for i in items.items)
+    assert items.total_revenue_current is None
+    assert items.items[0].name == "Salted Fries"  # biggest fall, by qty
+
+    delivery = queries.delivery_performance(
+        fetch,
+        DeliveryPerformanceInput(
+            restaurant_id=ZOMATO_SWAAD,
+            start_date=date(2024, 9, 10),
+            end_date=date(2024, 9, 11),
+            group_by="hour",
+        ),
+        TABLES,
+    )
+    assert delivery.overall is not None and delivery.overall.delivered_orders == 2
+    assert delivery.overall.mean_delivery_minutes is None
+    assert delivery.overall.mean_distance_km == 1.75
+    assert [g.key for g in delivery.groups] == ["0", "23"]  # calendar order
+    assert "no delivery time" in (delivery.note or "") and delivery.currency == "INR"

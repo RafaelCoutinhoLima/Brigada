@@ -4,6 +4,7 @@
 #   databricks bundle deploy              # schema, raw volume, pipeline and refresh job
 #   uv run --extra lakehouse python ../scripts/export_lakehouse.py   # synthetic -> raw volume
 #   uv run --extra lakehouse python ../scripts/upload_source.py delivery_center <dir>
+#   uv run --extra lakehouse python ../scripts/upload_source.py zomato <dir>
 #   databricks bundle run brigada_refresh # bronze -> silver -> gold
 #
 # Made for Databricks Free Edition: serverless only, Unity Catalog catalog "workspace".
@@ -22,16 +23,16 @@ variables:
   sources:
     description: >-
       Comma-separated sources to build. "brigada" is the synthetic data
-      (scripts/export_lakehouse.py); "delivery_center" is the Kaggle dataset
-      (scripts/upload_source.py). Each needs its files in the raw volume.
-    default: brigada,delivery_center
+      (scripts/export_lakehouse.py); "delivery_center" and "zomato" are Kaggle
+      datasets (scripts/upload_source.py). Each needs its files in the raw volume.
+    default: brigada,delivery_center,zomato
 
 resources:
   schemas:
     brigada:
       catalog_name: ${var.catalog}
       name: ${var.schema}
-      comment: Brigada lakehouse. Synthetic restaurant data from scripts/seed_data.py.
+      comment: Brigada lakehouse. Synthetic data from scripts/seed_data.py and public datasets.
 
   volumes:
     raw:

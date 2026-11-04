@@ -11,6 +11,8 @@ Sources:
   (kaggle.com/datasets/nosbielcs/brazilian-delivery-center). Unzip it and point at the folder
   with orders.csv, stores.csv, hubs.csv, channels.csv and deliveries.csv (payments.csv and
   drivers.csv are not used yet).
+- ``zomato``: Kaggle Zomato restaurant order history (Delhi NCR, Sep 2024 to Jan 2025). Unzip it
+  and point at the folder with order_history_kaggle_data.csv; it goes up as the orders table.
 
 Usage::
 
@@ -34,13 +36,19 @@ from pathlib import Path
 # tests/lakehouse (those import pyspark; this script must not need it).
 SOURCES: dict[str, tuple[str, ...]] = {
     "delivery_center": ("orders", "stores", "hubs", "channels", "deliveries"),
+    "zomato": ("orders",),
+}
+# File stem when the download does not name it after the table.
+FILE_NAMES: dict[str, dict[str, str]] = {
+    "zomato": {"orders": "order_history_kaggle_data"},
 }
 
 
 def find_files(source: str, folder: Path) -> dict[str, Path]:
     """table -> file. Fails listing every missing file, not just the first."""
     tables = SOURCES[source]
-    found = {t: folder / f"{t}.csv" for t in tables}
+    stems = FILE_NAMES.get(source, {})
+    found = {t: folder / f"{stems.get(t, t)}.csv" for t in tables}
     missing = [str(p) for p in found.values() if not p.is_file()]
     if missing:
         raise FileNotFoundError(f"{source}: missing {', '.join(missing)}")

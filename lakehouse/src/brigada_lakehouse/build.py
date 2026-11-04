@@ -9,10 +9,14 @@ same tables.
 from pyspark.sql import DataFrame, SparkSession
 
 from brigada_lakehouse import common, gold
-from brigada_lakehouse.sources import brigada, delivery_center
+from brigada_lakehouse.sources import brigada, delivery_center, zomato
 
-SOURCES = {brigada.SOURCE: brigada, delivery_center.SOURCE: delivery_center}
-WITH_ITEMS = (brigada.SOURCE,)
+SOURCES = {
+    brigada.SOURCE: brigada,
+    delivery_center.SOURCE: delivery_center,
+    zomato.SOURCE: zomato,
+}
+WITH_ITEMS = (brigada.SOURCE, zomato.SOURCE)
 
 
 def build(spark: SparkSession, raw_path: str, sources: list[str]) -> dict[str, DataFrame]:
@@ -53,6 +57,19 @@ def build(spark: SparkSession, raw_path: str, sources: list[str]) -> dict[str, D
                 t["silver_delivery_center_restaurants"],
             ),
             {**common.ORDER_EXPECTATIONS, **delivery_center.ORDER_EXPECTATIONS},
+        )
+
+    if zomato.SOURCE in sources:
+        z = "bronze_zomato_orders"
+        t["silver_zomato_restaurants"] = zomato.restaurants(t[z])
+        t["silver_zomato_menu_items"] = common.apply_expectations(
+            zomato.menu_items(t[z]), common.MENU_ITEM_EXPECTATIONS
+        )
+        t["silver_zomato_orders"] = common.apply_expectations(
+            zomato.orders(t[z]), {**common.ORDER_EXPECTATIONS, **zomato.ORDER_EXPECTATIONS}
+        )
+        t["silver_zomato_order_items"] = common.apply_expectations(
+            zomato.order_items(t[z], t["silver_zomato_orders"]), common.ORDER_ITEM_EXPECTATIONS
         )
 
     def union(name: str, among: list[str]) -> DataFrame:

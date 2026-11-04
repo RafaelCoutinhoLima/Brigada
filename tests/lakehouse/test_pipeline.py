@@ -14,18 +14,21 @@ pytest.importorskip("pyspark")
 
 from brigada_lakehouse import common, gold  # noqa: E402
 from brigada_lakehouse.build import SOURCES  # noqa: E402
-from brigada_lakehouse.sources import brigada, delivery_center  # noqa: E402
+from brigada_lakehouse.sources import brigada, delivery_center, zomato  # noqa: E402
 from pyspark.sql import functions as F  # noqa: E402
 
 from scripts.export_lakehouse import to_csv  # noqa: E402
 from scripts.seed_data import OUTAGE_RESTAURANT_ID, generate, last_tuesday, planted_facts  # noqa: E402
+from scripts.upload_source import FILE_NAMES as UPLOAD_FILE_NAMES  # noqa: E402
 from scripts.upload_source import SOURCES as UPLOAD_SOURCES  # noqa: E402
 
-from .conftest import END  # noqa: E402
+from .conftest import END, ZOMATO_INJECTION  # noqa: E402
 
 pytestmark = pytest.mark.spark
 
 DC = delivery_center.RESTAURANT_ID_OFFSET
+Z = zomato.RESTAURANT_ID_OFFSET
+Z1, Z2 = Z + 20320607, Z + 21309083
 
 
 def _rows(df: Any, key: str) -> dict[Any, Any]:
@@ -45,6 +48,7 @@ def test_pipeline_defines_the_same_tables_as_build(tables: dict[str, Any]) -> No
 def test_upload_script_knows_the_tables_of_each_source() -> None:
     for source, tables in UPLOAD_SOURCES.items():
         assert tables == SOURCES[source].TABLES
+        assert UPLOAD_FILE_NAMES.get(source, {}) == getattr(SOURCES[source], "FILE_NAMES", {})
 
 
 # Synthetic source -------------------------------------------------------------------------
@@ -185,7 +189,107 @@ def test_gold_delivery_hourly_sums_and_counts(tables: dict[str, Any]) -> None:
 
 def test_items_only_from_sources_that_have_them(tables: dict[str, Any]) -> None:
     items = tables["gold_item_daily_sales"]
-    assert items.where(items.restaurant_id >= DC).count() == 0
+    dc = (items.restaurant_id >= DC) & (items.restaurant_id < Z)
+    assert items.where(dc).count() == 0
+    assert items.where(items.restaurant_id >= Z).count() > 0
+
+
+# Zomato -------------------------------------------------------------------------------------
+
+
+def test_zomato_restaurants_are_outlets_with_their_subzone(tables: dict[str, Any]) -> None:
+    rows = _rows(tables["silver_zomato_restaurants"], "restaurant_id")
+    assert set(rows) == {Z1, Z2}  # id 100000000 would overflow the offset range: dropped
+    assert rows[Z1]["name"] == "Swaad (Sector 4)" and rows[Z1]["source_id"] == "20320607"
+    assert rows[Z2]["name"] == "Swaad (Sector 135)"  # 2 orders there, 1 in Shahdara
+    assert rows[Z1]["city"] == "Delhi NCR" and rows[Z1]["state"] is None
+    assert (rows[Z1]["currency"], rows[Z1]["timezone"]) == ("INR", "Asia/Kolkata")
+    assert Z2 < 2**31 and Z1 > DC + 1_000_000  # fits an integer, never a Delivery Center id
+
+
+def test_zomato_orders_are_cleaned(tables: dict[str, Any]) -> None:
+    rows = _rows(tables["silver_zomato_orders"], "order_id")
+    # z5 picked up, z6 return cancelled, z7 impossible time, z8 id out of range,
+    # z9 unknown delivery type, z13 zero total.
+    assert set(rows) == {"z1", "z2", "z3", "z4", "z10", "z11", "z12"}
+    z1 = rows["z1"]
+    assert z1["created_at_local"] == datetime(2024, 9, 10, 23, 38)  # India local, no conversion
+    assert (z1["local_day"], z1["local_hour"]) == (date(2024, 9, 10), 23)
+    assert z1["channel"] == "zomato_delivery" and z1["status"] == "completed"
+    assert z1["total"] == Decimal("666.75") and z1["rating"] == 4.0
+    assert z1["distance_km"] == 3.0 and z1["delivery_minutes"] is None  # no delivery time
+    z2 = rows["z2"]
+    assert (z2["local_day"], z2["local_hour"]) == (date(2024, 9, 11), 0)  # after midnight
+    assert z2["distance_km"] == 0.5  # "<1km" is a band, not 0
+    assert rows["z3"]["status"] == "canceled" and rows["z4"]["status"] == "canceled"
+    assert rows["z10"]["distance_km"] == 21.0
+    assert rows["z11"]["distance_km"] is None and rows["z11"]["rating"] is None  # "", "9"
+
+
+def test_zomato_free_text_never_leaves_bronze(tables: dict[str, Any]) -> None:
+    bronze = tables["bronze_zomato_orders"]
+    assert bronze.where(bronze.review == ZOMATO_INJECTION).count() == 1  # kept as it came
+    for name in (
+        "silver_zomato_orders",
+        "silver_zomato_order_items",
+        "silver_zomato_menu_items",
+        "silver_zomato_restaurants",
+    ):
+        df = tables[name]
+        assert not {"review", "instructions", "customer_id", "customer_complaint_tag"} & set(
+            df.columns
+        )
+        text = " ".join(str(v) for r in df.collect() for v in r.asDict().values())
+        assert "Ignore previous" not in text
+
+
+def test_zomato_items_are_parsed_per_outlet(tables: dict[str, Any]) -> None:
+    menu = tables["silver_zomato_menu_items"].collect()
+    by_outlet: dict[int, dict[str, int]] = {}
+    for r in menu:
+        by_outlet.setdefault(r["restaurant_id"], {})[r["name"]] = r["menu_item_id"]
+    assert set(by_outlet[Z1]) == {"Animal Fries", "Salted Fries", "OG Cheese Burger"}
+    assert set(by_outlet[Z2]) == {"Animal Fries", "Peri Peri Fries"}  # "garbage part" is not
+    assert by_outlet[Z1]["Animal Fries"] != by_outlet[Z2]["Animal Fries"]  # per outlet
+    assert all(i > 0 for names in by_outlet.values() for i in names.values())
+    assert all(r["category"] is None and r["active"] is None for r in menu)
+
+    lines = tables["silver_zomato_order_items"]
+    got = {(r["order_id"], r["menu_item_id"]): r for r in lines.collect()}
+    burger = by_outlet[Z1]["OG Cheese Burger"]
+    assert got[("z2", burger)]["qty"] == 2  # "Og" + "OG" in one order: one line, qty 2
+    assert got[("z1", by_outlet[Z1]["Salted Fries"])]["qty"] == 2
+    assert {o for o, _ in got} == {"z1", "z2", "z3", "z4", "z10", "z11", "z12"}
+    assert [k for k in got if k[0] == "z12"] == [("z12", by_outlet[Z2]["Animal Fries"])]
+    assert all(r["unit_price"] is None for r in got.values())  # no prices in the source
+
+
+def test_zomato_item_id_is_stable_across_runs(spark: Any, raw_dir: Path) -> None:
+    from brigada_lakehouse.build import build
+
+    again = build(spark, str(raw_dir), ["zomato"])["silver_zomato_menu_items"]
+    first = {(r["restaurant_id"], r["name"]): r["menu_item_id"] for r in again.collect()}
+    assert first[(Z1, "Animal Fries")] > 0
+    second = build(spark, str(raw_dir), ["zomato"])["silver_zomato_menu_items"].collect()
+    assert first == {(r["restaurant_id"], r["name"]): r["menu_item_id"] for r in second}
+
+
+def test_zomato_gold(tables: dict[str, Any]) -> None:
+    g = tables["gold_daily_channel_sales"]
+    z = _rows(g.where((g.restaurant_id == Z1) & (g.day == date(2024, 9, 11))), "channel")
+    assert set(z) == {"zomato_delivery"}
+    day = z["zomato_delivery"]
+    assert day["orders"] == 1 and day["revenue"] == Decimal("300.00")
+    assert day["canceled_orders"] == 2  # rejected and returned
+    items = tables["gold_item_daily_sales"].where(f"restaurant_id = {Z1}").collect()
+    assert items and all(r["revenue"] is None for r in items)  # unknown, never 0
+    assert sum(r["qty"] for r in items) == 1 + 2 + 2  # z1 fries + salted x2, z2 burger x2
+    hourly = tables["gold_delivery_hourly"].where(f"restaurant_id = {Z1}").collect()
+    assert sum(r["delivered_orders"] for r in hourly) == 2
+    assert sum(r["timed_orders"] for r in hourly) == 0
+    assert sum(r["distance_km_sum"] for r in hourly) == 3.5
+    rest = _rows(tables["gold_restaurants"], "restaurant_id")
+    assert rest[Z1]["currency"] == "INR" and rest[Z1]["completed_orders"] == 2
 
 
 # Gold logic -------------------------------------------------------------------------------
@@ -230,6 +334,7 @@ def test_gold_reproduces_the_planted_outage(tables: dict[str, Any]) -> None:
 
 def test_gold_item_sales_matches_the_order_lines(tables: dict[str, Any]) -> None:
     items = tables["gold_item_daily_sales"]
+    items = items.where(items.restaurant_id < DC)  # the synthetic source only
     dataset = generate(END)
     totals = items.agg({"revenue": "sum", "qty": "sum"}).first()
     assert totals["sum(qty)"] == sum(i.qty for i in dataset.order_items)
@@ -342,3 +447,34 @@ def test_real_delivery_center_download(
     }
     # After UTC -> local, lunch (12h) and dinner (19-20h) are the peaks, not 15h and 22h.
     assert hours[12] > hours[15] and hours[19] > hours[22]
+
+
+def test_real_zomato_download(spark: Any, real_zomato_file: Path, tmp_path: Path) -> None:
+    from brigada_lakehouse.build import build
+
+    from scripts.upload_source import main as upload_main
+
+    assert upload_main(["zomato", str(real_zomato_file.parent), "--out-dir", str(tmp_path)]) == 0
+    t = build(spark, str(tmp_path), ["zomato"])
+    raw = t["bronze_zomato_orders"].count()
+    orders = t["silver_zomato_orders"]
+    kept = orders.count()
+    restaurants = t["silver_zomato_restaurants"].count()
+    lines = t["silver_zomato_order_items"]
+    menu = t["silver_zomato_menu_items"].count()
+    statuses = {r["status"]: r["count"] for r in orders.groupBy("status").count().collect()}
+    print(
+        f"\nZomato: {raw} raw orders, {kept} kept {statuses}, {restaurants} outlets, "
+        f"{lines.count()} order lines, {menu} dishes"
+    )
+    # 3 "Picked up" + 3 "Return cancelled" are the only drops in the file.
+    assert raw == 21_321 and kept == raw - 6 and restaurants == 21
+    assert statuses == {"completed": 21_131, "canceled": 184}
+    hours = {r["local_hour"]: r["count"] for r in orders.groupBy("local_hour").count().collect()}
+    # India local as written: dinner (20h) above lunch (13h), nothing from 5h to 10h.
+    assert hours[20] > hours[13] > hours[11] and not any(hours.get(h) for h in range(5, 11))
+    assert orders.where("distance_km IS NULL").count() == 0
+    assert orders.where("rating IS NOT NULL").count() == 2_491
+    # Every "N x name" part parsed: 38,232 parts, 80 repeats folded into one line each.
+    total_qty = lines.agg({"qty": "sum"}).first()[0]
+    assert lines.where("qty IS NULL OR menu_item_id IS NULL").count() == 0 and total_qty > 38_000
