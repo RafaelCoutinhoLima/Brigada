@@ -65,7 +65,7 @@ def test_brigada_silver_keeps_every_order_with_local_day_and_delivery(
     orders = tables["silver_brigada_orders"]
     assert orders.count() == len(dataset.orders)
     assert tables["silver_brigada_order_items"].count() == len(dataset.order_items)
-    tz = ZoneInfo(common.LOCAL_TZ)
+    tz = ZoneInfo(brigada.TIMEZONE)
     sample = {str(o.id): o.created_at.astimezone(tz).date() for o in dataset.orders[:300]}
     got = {
         r["order_id"]: r["local_day"]
@@ -93,6 +93,30 @@ def test_order_after_21h_local_belongs_to_that_local_day(spark: Any) -> None:
     assert row["local_day"] == date(2026, 10, 27)
     assert row["local_hour"] == 22 and row["iso_weekday"] == 2
     assert row["delivery_minutes"] is None
+
+
+def test_raw_headers_become_delta_safe_names() -> None:
+    assert common.column_name("Restaurant ID") == "restaurant_id"
+    assert (
+        common.column_name("Restaurant discount (Flat offs, Freebies & others)")
+        == "restaurant_discount_flat_offs_freebies_others"
+    )
+    assert common.column_name("KPT duration (minutes)") == "kpt_duration_minutes"
+    assert common.column_name("order_moment_created") == "order_moment_created"  # unchanged
+
+
+def test_time_zone_is_the_sources_not_the_sessions(spark: Any) -> None:
+    # The session zone is Asia/Tokyo (conftest): neither result may depend on it.
+    df = spark.createDataFrame([("1/5/2021 12:30:00 AM",)], ["t"])
+    fmt = "M/d/yyyy h:mm:ss a"
+    row = df.select(
+        common.text_to_wall_clock("t", fmt).alias("wall"),
+        common.utc_text_to_local("t", fmt, "America/Sao_Paulo").alias("sp"),
+        common.utc_text_to_local("t", fmt, "Asia/Kolkata").alias("india"),
+    ).first()
+    assert row["wall"] == datetime(2021, 1, 5, 0, 30)
+    assert row["sp"] == datetime(2021, 1, 4, 21, 30)  # UTC-3
+    assert row["india"] == datetime(2021, 1, 5, 6, 0)  # UTC+5:30
 
 
 # Delivery Center ----------------------------------------------------------------------------
@@ -137,6 +161,8 @@ def test_gold_channels_follow_the_source(tables: dict[str, Any]) -> None:
 
 def test_gold_restaurants_has_coverage(tables: dict[str, Any]) -> None:
     rows = _rows(tables["gold_restaurants"], "restaurant_id")
+    assert (rows[1]["currency"], rows[1]["timezone"]) == ("BRL", "America/Sao_Paulo")
+    assert (rows[DC + 3]["currency"], rows[DC + 3]["timezone"]) == ("BRL", "America/Sao_Paulo")
     assert rows[DC + 3]["data_from"] == date(2021, 1, 4)
     assert rows[DC + 3]["data_until"] == date(2021, 1, 5)
     assert rows[DC + 3]["completed_orders"] == 2

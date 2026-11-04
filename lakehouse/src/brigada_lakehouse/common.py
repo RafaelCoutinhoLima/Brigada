@@ -1,18 +1,32 @@
 """Helpers shared by every source and by the gold layer.
 
 Time zones: every source ends up with a local wall clock (``created_at_local``, TIMESTAMP_NTZ in
-``LOCAL_TZ``). The conversions below never depend on the Spark session time zone (a Databricks
-workspace and a laptop disagree on it): instants are turned into UTC wall clocks through epoch
-seconds, and ``convert_timezone`` works on NTZ values.
+the source's own ``TIMEZONE``: Brazil for Brigada and Delivery Center, India for Zomato). The
+conversions below never depend on the Spark session time zone (a Databricks workspace and a
+laptop disagree on it): text is parsed as an exact instant (an explicit ``+0000`` offset), epoch
+seconds give its wall clock, and ``convert_timezone`` works on NTZ values.
+
+Currency: amounts stay in the source's own currency (``CURRENCY``, ISO 4217) and are never
+converted; ``gold_restaurants.currency`` says which one, and the tools return it.
 """
+
+import re
 
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
-LOCAL_TZ = "America/Sao_Paulo"
-
 # The conformed silver contract every source maps to (see sources/). Gold reads only these.
-RESTAURANT_COLUMNS = ("restaurant_id", "source", "source_id", "name", "segment", "city", "state")
+RESTAURANT_COLUMNS = (
+    "restaurant_id",
+    "source",
+    "source_id",
+    "name",
+    "segment",
+    "city",
+    "state",
+    "currency",  # ISO 4217 of every amount of the restaurant (BRL, INR)
+    "timezone",  # IANA zone of created_at_local
+)
 ORDER_COLUMNS = (
     "source",
     "order_id",
@@ -27,6 +41,7 @@ ORDER_COLUMNS = (
     "delivery_minutes",  # order to delivery; null when unknown or implausible
     "promised_minutes",  # what the customer was promised; null when the source has none
     "distance_km",
+    "rating",  # customer rating 1-5; null when not rated or the source has none
 )
 ORDER_ITEM_COLUMNS = ("source", "order_id", "restaurant_id", "menu_item_id", "qty", "unit_price")
 MENU_ITEM_COLUMNS = ("restaurant_id", "menu_item_id", "name", "category", "active")
@@ -47,7 +62,8 @@ ORDER_ITEM_EXPECTATIONS = {
     "order_present": "order_id IS NOT NULL",
     "item_present": "menu_item_id IS NOT NULL",
     "positive_qty": "qty > 0",
-    "non_negative_price": "unit_price >= 0",
+    # NULL price: the source does not record it (Zomato). Revenue per item is then unknown, not 0.
+    "non_negative_price": "unit_price IS NULL OR unit_price >= 0",
 }
 MENU_ITEM_EXPECTATIONS = {
     "id_present": "menu_item_id IS NOT NULL",
@@ -55,11 +71,19 @@ MENU_ITEM_EXPECTATIONS = {
 }
 
 
+def column_name(header: str) -> str:
+    """A raw header as a Delta-safe column name: Delta rejects spaces and ``,;{}()=`` in names,
+    and Zomato's headers have them ("Restaurant discount (Flat offs, Freebies & others)").
+    Lowercase, every run of other characters becomes one ``_``. Already plain names
+    (Delivery Center, Brigada) do not change."""
+    return re.sub(r"[^0-9a-z]+", "_", header.lower()).strip("_")
+
+
 def read_raw(
     spark: SparkSession, raw_path: str, table: str, *, encoding: str = "UTF-8"
 ) -> DataFrame:
-    """Bronze: one raw table (``<raw_path>/<table>/*.csv``), every column a string, plus the
-    source file and the read time."""
+    """Bronze: one raw table (``<raw_path>/<table>/*.csv``), every value a string as it came
+    (only the header is made Delta-safe), plus the source file and the read time."""
     raw = (
         spark.read.option("header", True)
         .option("escape", '"')
@@ -67,6 +91,10 @@ def read_raw(
         .option("encoding", encoding)
         .csv(f"{raw_path}/{table}/")
     )
+    names = [column_name(c) for c in raw.columns]
+    if len(set(names)) != len(names):
+        raise ValueError(f"{table}: headers collide once made Delta-safe: {raw.columns}")
+    raw = raw.toDF(*names)
     return raw.withColumn("_source_file", F.col("_metadata.file_path")).withColumn(
         "_ingested_at", F.current_timestamp()
     )
@@ -92,21 +120,26 @@ def clean_text(column: str) -> Column:
     return F.when(text == "", None).otherwise(text)
 
 
-def utc_text_to_local(column: str, fmt: str) -> Column:
-    """A UTC timestamp written as text in ``fmt`` -> local wall clock (TIMESTAMP_NTZ).
+def text_to_wall_clock(column: str, fmt: str) -> Column:
+    """A timestamp written as text in ``fmt`` -> the same wall clock as TIMESTAMP_NTZ, whatever
+    the session zone. Malformed or impossible values (2/30, 25:61) become NULL.
 
-    Malformed or impossible values (2/30) become NULL. The offset is appended so the parse is
-    an exact instant whatever the session zone; epoch seconds then give the UTC wall clock.
+    The ``+0000`` offset makes the parse an exact instant; its epoch seconds, added to the NTZ
+    epoch, give back the written wall clock without passing through the session zone.
     """
     instant = F.expr(f"try_to_timestamp(concat(`{column}`, ' +0000'), '{fmt} Z')")
-    utc = F.expr("timestamp_ntz'1970-01-01 00:00:00'") + F.make_dt_interval(
+    return F.expr("timestamp_ntz'1970-01-01 00:00:00'") + F.make_dt_interval(
         F.lit(0), F.lit(0), F.lit(0), F.unix_seconds(instant).cast("decimal(18,6)")
     )
-    return F.convert_timezone(F.lit("UTC"), F.lit(LOCAL_TZ), utc)
 
 
-def utc_ntz_to_local(utc: Column) -> Column:
-    return F.convert_timezone(F.lit("UTC"), F.lit(LOCAL_TZ), utc)
+def utc_text_to_local(column: str, fmt: str, tz: str) -> Column:
+    """A UTC timestamp written as text in ``fmt`` -> wall clock in ``tz`` (TIMESTAMP_NTZ)."""
+    return utc_ntz_to_local(text_to_wall_clock(column, fmt), tz)
+
+
+def utc_ntz_to_local(utc: Column, tz: str) -> Column:
+    return F.convert_timezone(F.lit("UTC"), F.lit(tz), utc)
 
 
 def iso_weekday(day: Column) -> Column:

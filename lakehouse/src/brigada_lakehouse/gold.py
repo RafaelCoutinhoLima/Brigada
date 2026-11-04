@@ -2,7 +2,8 @@
 
 These are what the MCP tools read through the SQL warehouse (src/brigada/lakehouse):
 
-- ``gold_restaurants``: every restaurant, its source and the days it has data for.
+- ``gold_restaurants``: every restaurant, its source, currency and time zone, and the days it
+  has data for.
 - ``gold_daily_channel_sales``: revenue and orders per day and channel next to the same
   weekday's mean over the previous ``BASELINE_WEEKS`` weeks (sales_vs_baseline).
 - ``gold_item_daily_sales``: quantity and revenue per day and dish (item_trends). Only sources
@@ -50,6 +51,8 @@ def gold_restaurants(restaurants: DataFrame, orders: DataFrame) -> DataFrame:
         "segment",
         "city",
         "state",
+        "currency",
+        "timezone",
         "data_from",
         "data_until",
         F.coalesce("completed_orders", F.lit(0)).cast("bigint").alias("completed_orders"),

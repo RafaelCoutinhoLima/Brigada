@@ -21,6 +21,8 @@ from brigada_lakehouse.common import (
 )
 
 SOURCE = "brigada"
+TIMEZONE = "America/Sao_Paulo"
+CURRENCY = "BRL"
 CHANNELS = ("app", "telefone", "balcao")
 TABLES = ("restaurants", "menu_items", "orders", "order_items", "deliveries")
 
@@ -34,6 +36,8 @@ def restaurants(bronze: DataFrame) -> DataFrame:
         F.trim("cuisine").alias("segment"),
         F.trim("city").alias("city"),
         F.lit(None).cast("string").alias("state"),
+        F.lit(CURRENCY).alias("currency"),
+        F.lit(TIMEZONE).alias("timezone"),
         *_meta(bronze),
     ).where("restaurant_id IS NOT NULL")
     return conform(latest_per_key(df, ["restaurant_id"]), RESTAURANT_COLUMNS)
@@ -57,7 +61,7 @@ def orders(bronze: DataFrame, deliveries: DataFrame) -> DataFrame:
     df = bronze.select(
         F.trim("id").alias("order_id"),
         try_cast("restaurant_id", "bigint").alias("restaurant_id"),
-        utc_ntz_to_local(utc).alias("created_at_local"),
+        utc_ntz_to_local(utc, TIMEZONE).alias("created_at_local"),
         F.lower(F.trim("channel")).alias("channel"),
         F.lit("completed").alias("status"),
         try_cast("total", "decimal(12,2)").alias("total"),
@@ -77,6 +81,7 @@ def orders(bronze: DataFrame, deliveries: DataFrame) -> DataFrame:
         with_local_parts(df.drop(*_meta_names()).join(times, "order_id", "left"))
         .withColumn("source", F.lit(SOURCE))
         .withColumn("distance_km", F.lit(None).cast("double"))
+        .withColumn("rating", F.lit(None).cast("double"))  # reviews stay in Postgres
     )
     return conform(df, ORDER_COLUMNS)
 

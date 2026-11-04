@@ -8,7 +8,8 @@ answer for these restaurants, and the tools say so.
 What the profiling of the raw files found, and what this module does about it:
 
 - ``order_moment_created`` ("1/1/2021 12:01:36 AM") is **UTC**: the hourly volume peaks at 15h
-  and 22-23h, which is lunch and dinner only in UTC-3. Converted to America/Sao_Paulo.
+  and 22-23h, which is lunch and dinner only in UTC-3. Converted to ``TIMEZONE``. Amounts are
+  in reais (``CURRENCY``).
 - ``stores.csv`` and ``hubs.csv`` are Latin-1 (``SÃO PAULO``); store names carry trailing and
   doubled spaces. Read with the right encoding, whitespace normalized.
 - 40 channels collapse into the two that matter to an owner: marketplace vs own channel.
@@ -38,6 +39,8 @@ from brigada_lakehouse.common import (
 )
 
 SOURCE = "delivery_center"
+TIMEZONE = "America/Sao_Paulo"
+CURRENCY = "BRL"
 # Brigada restaurant id = offset + store_id, so the ids never collide with other sources.
 RESTAURANT_ID_OFFSET = 1_000_000
 CHANNELS = ("marketplace", "canal_proprio")
@@ -88,6 +91,8 @@ def restaurants(stores: DataFrame, hubs: DataFrame) -> DataFrame:
             F.lit("food").alias("segment"),
             "city",
             "state",
+            F.lit(CURRENCY).alias("currency"),
+            F.lit(TIMEZONE).alias("timezone"),
         )
     )
     return conform(df, RESTAURANT_COLUMNS)
@@ -127,7 +132,9 @@ def orders(
         F.trim("order_id").alias("order_id"),
         (try_cast("store_id", "bigint") + RESTAURANT_ID_OFFSET).alias("restaurant_id"),
         try_cast("channel_id", "int").alias("channel_id"),
-        utc_text_to_local("order_moment_created", TIMESTAMP_FORMAT).alias("created_at_local"),
+        utc_text_to_local("order_moment_created", TIMESTAMP_FORMAT, TIMEZONE).alias(
+            "created_at_local"
+        ),
         F.coalesce(status_map[raw_status], F.lower(raw_status)).alias("status"),
         try_cast("order_amount", "decimal(12,2)").alias("total"),
         F.when((cycle > 0) & (cycle <= MAX_DELIVERY_MINUTES), cycle).alias("delivery_minutes"),
@@ -141,6 +148,7 @@ def orders(
         .join(_delivery_per_order(deliveries), "order_id", "left")
         .withColumn("source", F.lit(SOURCE))
         .withColumn("promised_minutes", F.lit(None).cast("double"))
+        .withColumn("rating", F.lit(None).cast("double"))  # the dataset has no reviews
     )
     return conform(with_local_parts(df), ORDER_COLUMNS)
 
