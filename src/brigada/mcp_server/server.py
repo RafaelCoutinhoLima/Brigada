@@ -731,10 +731,11 @@ def _register_lakehouse(server: BrigadaMCPServer, lake: Lakehouse) -> None:
         restaurant_id: RestaurantId, start_date: date, end_date: date
     ) -> SalesVsBaselineResult:
         """Each local day (max 31) next to its normal level: revenue and orders, total and per
-        channel (app, telefone, balcao), against the mean of the same weekday in the previous
-        4 weeks, with the change in %. Use it first to explain a drop or a spike in one call
-        ("why did sales fall on Tuesday?"): a channel at -100% while the others are normal is
-        the likely cause. Data comes from the lakehouse and may lag a day: check data_until.
+        channel of the restaurant's dataset, against the mean of the same weekday in the
+        previous 4 weeks, with the change in %. Use it first to explain a drop or a spike in
+        one call ("why did sales fall on Tuesday?"): a channel at -100% while the others are
+        normal is the likely cause. Amounts are in `currency`. Data comes from the lakehouse
+        and may lag a day: check data_until.
         """
         inp = _validate(
             SalesVsBaselineInput,
@@ -753,9 +754,10 @@ def _register_lakehouse(server: BrigadaMCPServer, lake: Lakehouse) -> None:
         order_by: TrendOrderBy = "drop",
     ) -> ItemTrendsResult:
         """Per menu item: qty and revenue in the last `days` days up to end_date vs the `days`
-        days before, with the change in R$ and %. order_by: drop (biggest fall first), rise,
-        revenue. Use for "which dish sold less this week?". Data comes from the lakehouse and
-        may lag a day: check data_until.
+        days before, with the change in `currency` and %. order_by: drop (biggest fall first),
+        rise, revenue. When the dataset has no item prices, revenue is null and the order is by
+        qty. Use for "which dish sold less this week?". Data comes from the lakehouse and may
+        lag a day: check data_until.
         """
         inp = _validate(
             ItemTrendsInput,
@@ -775,9 +777,10 @@ def _register_lakehouse(server: BrigadaMCPServer, lake: Lakehouse) -> None:
         group_by: DeliveryPerfGroupBy = "none",
     ) -> DeliveryPerformanceResult:
         """Delivery time per local day, weekday, hour or weekday+hour: mean minutes from order
-        to delivery, mean promised minutes and share delivered late (when the restaurant's
-        dataset has promises), mean distance in km (when it has distances). Works for every
-        restaurant in the lakehouse, including the real datasets. Check data_until.
+        to delivery (when the restaurant's dataset records it), mean promised minutes and share
+        delivered late (when it has promises), mean distance in km (when it has distances).
+        Works for every restaurant in the lakehouse, including the real datasets. Check
+        data_until and note.
         """
         inp = _validate(
             DeliveryPerformanceInput,

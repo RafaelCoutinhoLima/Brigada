@@ -36,10 +36,13 @@ class FakeWarehouse:
         data_from: date | None,
         until: date | None,
         source: str = "brigada",
+        currency: str = "BRL",
     ):
         self.rows = rows
         self.coverage = (
-            [{"source": source, "data_from": data_from, "data_until": until}] if until else []
+            [{"source": source, "currency": currency, "data_from": data_from, "data_until": until}]
+            if until
+            else []
         )
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
@@ -84,6 +87,8 @@ def test_sales_vs_baseline_totals_the_channels_and_binds_every_value() -> None:
     assert day.revenue_change_pct == -79.7
     assert result.note is None
     assert day.canceled_orders == 1 and result.data_source == "brigada"
+    assert result.currency == "BRL"
+    assert "currency" in fetch.calls[1][0]  # read from gold_restaurants, not assumed
     main_sql, params = fetch.calls[0]
     assert "`workspace`.`brigada`.`gold_daily_channel_sales`" in main_sql
     for sql, params in fetch.calls:
@@ -125,6 +130,7 @@ def _item(item_id: int, current: float, previous: float) -> dict[str, Any]:
         "qty_previous": int(previous // 10),
         "revenue_current": current,
         "revenue_previous": previous,
+        "priced_rows": 14,
     }
 
 
@@ -141,6 +147,7 @@ def test_item_trends_windows_and_order() -> None:
     assert result.items[0].revenue_change_pct == -66.7
     assert result.items[1].revenue_change_pct is None  # nothing sold before: no %
     assert (result.total_revenue_current, result.total_revenue_previous) == (650.0, 500.0)
+    assert result.items[0].qty_change == -20
     sql, params = fetch.calls[0]
     assert params["current_start"] == date(2026, 10, 21)
     assert params["previous_start"] == date(2026, 10, 14)
@@ -149,6 +156,32 @@ def test_item_trends_windows_and_order() -> None:
     assert [i.menu_item_id for i in rise.items] == [2, 3, 1]
     top = queries.item_trends(fetch, inp.model_copy(update={"limit": 1}), TABLES)
     assert len(top.items) == 1 and top.total_revenue_current == 650.0  # totals: every item
+
+
+def test_item_trends_without_prices_ranks_by_qty_and_never_says_zero() -> None:
+    # Gold leaves revenue NULL for a source without item prices; the SQL's CASE ... ELSE 0
+    # sums that to 0, so only priced_rows = 0 tells "unknown" from "sold nothing".
+    rows = [
+        {**_item(1, 0.0, 0.0), "qty_current": 3, "qty_previous": 9, "priced_rows": 0},
+        {**_item(2, 0.0, 0.0), "qty_current": 8, "qty_previous": 2, "priced_rows": 0},
+        {**_item(3, 0.0, 0.0), "category": None, "active": None, "priced_rows": 0},
+    ]
+    fetch = FakeWarehouse(
+        rows, date(2024, 9, 1), date(2025, 1, 31), source="zomato", currency="INR"
+    )
+    inp = ItemTrendsInput(restaurant_id=120_320_607, end_date=date(2025, 1, 31), days=7)
+    result = queries.item_trends(fetch, inp, TABLES)
+    assert [i.menu_item_id for i in result.items] == [1, 3, 2]  # by qty change
+    first = result.items[0]
+    assert first.qty_change == -6
+    assert first.revenue_current is None and first.revenue_change is None
+    assert first.revenue_change_pct is None
+    assert result.total_revenue_current is None and result.total_revenue_previous is None
+    assert result.items[1].category is None and result.items[1].active is None
+    assert result.currency == "INR"
+    assert result.note is not None and "no item prices" in result.note
+    top = queries.item_trends(fetch, inp.model_copy(update={"order_by": "revenue"}), TABLES)
+    assert top.items[0].menu_item_id == 2  # most sold by qty
 
 
 def test_item_trends_flags_a_partial_previous_window() -> None:
@@ -255,11 +288,20 @@ def test_item_trends_says_when_the_dataset_has_no_order_lines() -> None:
 
 
 def _hourly(
-    k: str, n: int, minutes: float, promised: float, p_n: int, late: int, km: float, km_n: int
+    k: str,
+    n: int,
+    minutes: float,
+    promised: float,
+    p_n: int,
+    late: int,
+    km: float,
+    km_n: int,
+    timed: int | None = None,
 ) -> dict:
     return {
         "k": k,
         "delivered_orders": n,
+        "timed_orders": n if timed is None else timed,
         "delivery_minutes_sum": minutes,
         "promised_minutes_sum": promised,
         "promised_count": p_n,
@@ -303,5 +345,26 @@ def test_delivery_performance_without_promises_or_deliveries() -> None:
     assert result.overall.mean_promised_minutes is None and result.overall.late_share is None
     assert result.overall.mean_distance_km == 2.0
 
+    assert result.overall.timed_orders == 3 and result.currency == "BRL"
+
     empty = queries.delivery_performance(FakeWarehouse([], None, None), inp, TABLES)
     assert empty.overall is None and "no data" in (empty.note or "")
+
+
+def test_delivery_performance_without_delivery_times_says_unknown() -> None:
+    rows = [_hourly("20", 4, 0.0, 0.0, 0, 0, 10.0, 4, timed=0)]
+    fetch = FakeWarehouse(
+        rows, date(2024, 9, 1), date(2025, 1, 31), source="zomato", currency="INR"
+    )
+    inp = DeliveryPerformanceInput(
+        restaurant_id=120_320_607,
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 1, 31),
+        group_by="hour",
+    )
+    result = queries.delivery_performance(fetch, inp, TABLES)
+    assert result.overall is not None and result.overall.delivered_orders == 4
+    assert result.overall.timed_orders == 0 and result.overall.mean_delivery_minutes is None
+    assert result.overall.mean_distance_km == 2.5
+    assert result.groups[0].mean_delivery_minutes is None
+    assert result.note is not None and "no delivery time" in result.note

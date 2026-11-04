@@ -8,8 +8,8 @@ These are what the MCP tools read through the SQL warehouse (src/brigada/lakehou
   weekday's mean over the previous ``BASELINE_WEEKS`` weeks (sales_vs_baseline).
 - ``gold_item_daily_sales``: quantity and revenue per day and dish (item_trends). Only sources
   that record order lines appear.
-- ``gold_delivery_hourly``: delivery time, promise and distance per day and local hour
-  (delivery_performance).
+- ``gold_delivery_hourly``: delivered orders, delivery time, promise and distance per day and
+  local hour (delivery_performance).
 
 Revenue counts completed orders only; canceled orders are counted apart.
 """
@@ -130,9 +130,16 @@ def gold_item_daily_sales(
 ) -> DataFrame:
     """Quantity, revenue and orders per restaurant, local day and menu item, zero-filled over
     every item of the restaurant (an item that stopped selling shows up with 0). Completed
-    orders only; restaurants whose source has no order lines do not appear."""
+    orders only; restaurants whose source has no order lines do not appear.
+
+    Revenue needs a price on every order line of the restaurant (Zomato records none): when any
+    is missing, ``revenue`` is NULL on every row of that restaurant, never a zero or a partial
+    sum, and ``qty`` is still exact."""
     completed = orders.where("status = 'completed'").select(
         "order_id", "restaurant_id", "local_day"
+    )
+    priced = order_items.groupBy("restaurant_id").agg(
+        (F.count("unit_price") == F.count("*")).alias("priced")
     )
     sold = (
         order_items.join(completed, ["order_id", "restaurant_id"])
@@ -151,7 +158,8 @@ def gold_item_daily_sales(
         "active",
     )
     calendar = _calendar(orders).drop("source")
-    grid = calendar.join(items, "restaurant_id")
+    grid = calendar.join(items, "restaurant_id").join(priced, "restaurant_id", "left")
+    revenue = F.when(F.col("priced"), F.coalesce("revenue", F.lit(0)))
     return grid.join(sold, ["restaurant_id", "day", "menu_item_id"], "left").select(
         "restaurant_id",
         "day",
@@ -160,22 +168,26 @@ def gold_item_daily_sales(
         "category",
         "active",
         F.coalesce("qty", F.lit(0)).cast("int").alias("qty"),
-        F.coalesce("revenue", F.lit(0)).cast("decimal(14,2)").alias("revenue"),
+        revenue.cast("decimal(14,2)").alias("revenue"),
         F.coalesce("orders", F.lit(0)).cast("int").alias("orders"),
     )
 
 
 def gold_delivery_hourly(orders: DataFrame) -> DataFrame:
-    """Per restaurant, local day and hour: completed orders with a known delivery time, sums
-    and counts of delivery minutes, promised minutes and distance (so any grouping can average
-    them correctly), and how many arrived after the promise. Sources without a promise or a
-    distance leave those counts at 0."""
-    timed = orders.where("status = 'completed' AND delivery_minutes IS NOT NULL")
+    """Per restaurant, local day and hour: completed orders known to be delivered (with a
+    delivery time or a distance), how many of them have a delivery time, sums and counts of
+    delivery minutes, promised minutes and distance (so any grouping can average them
+    correctly), and how many arrived after the promise. A source without delivery times
+    (Zomato) still shows its orders and distances, with ``timed_orders`` at 0; sources without
+    a promise or a distance leave those counts at 0."""
+    delivered = orders.where(
+        "status = 'completed' AND (delivery_minutes IS NOT NULL OR distance_km IS NOT NULL)"
+    )
     late = (F.col("promised_minutes").isNotNull()) & (
         F.col("delivery_minutes") > F.col("promised_minutes")
     )
     return (
-        timed.groupBy(
+        delivered.groupBy(
             "restaurant_id",
             "source",
             F.col("local_day").alias("day"),
@@ -184,6 +196,7 @@ def gold_delivery_hourly(orders: DataFrame) -> DataFrame:
         )
         .agg(
             F.count("*").cast("int").alias("delivered_orders"),
+            F.count("delivery_minutes").cast("int").alias("timed_orders"),
             F.sum("delivery_minutes").alias("delivery_minutes_sum"),
             F.sum("promised_minutes").alias("promised_minutes_sum"),
             F.count("promised_minutes").cast("int").alias("promised_count"),
@@ -191,5 +204,5 @@ def gold_delivery_hourly(orders: DataFrame) -> DataFrame:
             F.sum("distance_km").alias("distance_km_sum"),
             F.count("distance_km").cast("int").alias("distance_count"),
         )
-        .na.fill(0.0, ["promised_minutes_sum", "distance_km_sum"])
+        .na.fill(0.0, ["delivery_minutes_sum", "promised_minutes_sum", "distance_km_sum"])
     )

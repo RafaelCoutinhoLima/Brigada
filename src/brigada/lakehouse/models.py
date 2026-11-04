@@ -1,8 +1,10 @@
-"""Inputs and outputs of the lakehouse tools (``sales_vs_baseline``, ``item_trends``).
+"""Inputs and outputs of the lakehouse tools (``sales_vs_baseline``, ``item_trends``,
+``delivery_performance``).
 
-Same conventions as ``brigada.mcp_server.models``: local calendar days (America/Sao_Paulo),
-inclusive; the type aliases are reused in the tool signatures so the JSON schema the model sees
-carries the bounds; cross-field rules live only in the input models.
+Same conventions as ``brigada.mcp_server.models``: calendar days in the restaurant's own time
+zone, inclusive; money in the restaurant's own currency (``currency``), never converted; the
+type aliases are reused in the tool signatures so the JSON schema the model sees carries the
+bounds; cross-field rules live only in the input models.
 """
 
 from __future__ import annotations
@@ -66,10 +68,16 @@ class ItemTrendsInput(_Input):
     order_by: TrendOrderBy = "drop"
 
 
+CURRENCY_FIELD = Field(
+    description="ISO 4217 code of every amount in this result (BRL = reais, INR = Indian "
+    "rupees). Never converted: report amounts in this currency."
+)
+
+
 class ChannelVsBaseline(_Output):
     channel: str
     orders: int = Field(description="Completed orders.")
-    revenue: float = Field(description="Revenue of completed orders.")
+    revenue: float = Field(description="Revenue of completed orders, in `currency`.")
     canceled_orders: int
     baseline_orders: float | None
     baseline_revenue: float | None
@@ -92,7 +100,8 @@ class DayVsBaseline(_Output):
     revenue_change_pct: float | None
     channels: list[ChannelVsBaseline] = Field(
         description="Every channel of the restaurant's source, zero-filled (Brigada: app, "
-        "telefone, balcao; Delivery Center: marketplace, canal_proprio)."
+        "telefone, balcao; Delivery Center: marketplace, canal_proprio; Zomato: "
+        "zomato_delivery)."
     )
 
 
@@ -102,8 +111,9 @@ class SalesVsBaselineResult(_Output):
     end_date: date
     source: str = Field(description="Where the numbers come from (the lakehouse gold table).")
     data_source: str | None = Field(
-        description="The restaurant's raw dataset, e.g. brigada, delivery_center."
+        description="The restaurant's raw dataset, e.g. brigada, delivery_center, zomato."
     )
+    currency: str | None = CURRENCY_FIELD
     data_until: date | None = Field(
         description="Last day the lakehouse has for this restaurant. Days after it are missing "
         "from `days`, not zero."
@@ -115,14 +125,21 @@ class SalesVsBaselineResult(_Output):
 class ItemTrend(_Output):
     menu_item_id: int
     name: str
-    category: str
-    active: bool
+    category: str | None = Field(description="null: the source has no menu categories.")
+    active: bool | None = Field(description="null: the source does not say if it is on the menu.")
     qty_current: int
     qty_previous: int
-    revenue_current: float
-    revenue_previous: float
-    revenue_change: float = Field(description="revenue_current - revenue_previous, in R$.")
-    revenue_change_pct: float | None = Field(description="null when revenue_previous is 0.")
+    qty_change: int = Field(description="qty_current - qty_previous.")
+    revenue_current: float | None = Field(
+        description="In `currency`. null: the source has no item prices (unknown, not zero)."
+    )
+    revenue_previous: float | None
+    revenue_change: float | None = Field(
+        description="revenue_current - revenue_previous, in `currency`; null without prices."
+    )
+    revenue_change_pct: float | None = Field(
+        description="null when revenue_previous is 0 or unknown."
+    )
 
 
 class ItemTrendsResult(_Output):
@@ -134,10 +151,11 @@ class ItemTrendsResult(_Output):
     order_by: TrendOrderBy
     source: str
     data_source: str | None
+    currency: str | None = CURRENCY_FIELD
     data_from: date | None
     data_until: date | None
-    total_revenue_current: float
-    total_revenue_previous: float
+    total_revenue_current: float | None = Field(description="null: the source has no prices.")
+    total_revenue_previous: float | None
     items: list[ItemTrend]
     note: str | None = None
 
@@ -147,8 +165,13 @@ class DeliveryGroup(_Output):
         description="all | day YYYY-MM-DD | weekday monday..sunday | hour 0-23 (local) | "
         "weekday_hour like 'saturday 20'."
     )
-    delivered_orders: int = Field(description="Completed orders with a known delivery time.")
-    mean_delivery_minutes: float
+    delivered_orders: int = Field(
+        description="Completed orders known to be delivered (with a delivery time or distance)."
+    )
+    timed_orders: int = Field(description="How many of them have a delivery time.")
+    mean_delivery_minutes: float | None = Field(
+        description="Mean over timed_orders; null: the source records no delivery time."
+    )
     mean_promised_minutes: float | None = Field(description="null: the source has no promise.")
     late_share: float | None = Field(
         description="Share (0-1) of orders with a promise that arrived after it; null when none."
@@ -163,6 +186,7 @@ class DeliveryPerformanceResult(_Output):
     group_by: DeliveryPerfGroupBy
     source: str
     data_source: str | None
+    currency: str | None = CURRENCY_FIELD
     data_until: date | None
     overall: DeliveryGroup | None = Field(description="The whole period; null with no deliveries.")
     groups: list[DeliveryGroup] = Field(description="Empty when group_by is 'none'.")

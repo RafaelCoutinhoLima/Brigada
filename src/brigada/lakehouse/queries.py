@@ -34,7 +34,7 @@ type Row = dict[str, Any]
 type Fetch = Callable[[str, dict[str, Any]], list[Row]]
 
 # Display order of the channels each source has; anything else goes last, alphabetically.
-CHANNEL_ORDER = ("app", "telefone", "balcao", "marketplace", "canal_proprio")
+CHANNEL_ORDER = ("app", "telefone", "balcao", "marketplace", "canal_proprio", "zomato_delivery")
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,7 @@ class GoldTables:
 @dataclass(frozen=True)
 class Coverage:
     data_source: str | None
+    currency: str | None
     data_from: date | None
     data_until: date | None
 
@@ -97,14 +98,14 @@ def _label(table: str) -> str:
 
 def coverage(fetch: Fetch, tables: GoldTables, restaurant_id: int) -> Coverage:
     rows = fetch(
-        f"SELECT source, data_from, data_until FROM {tables.restaurants} "
+        f"SELECT source, currency, data_from, data_until FROM {tables.restaurants} "
         "WHERE restaurant_id = :restaurant_id",
         {"restaurant_id": restaurant_id},
     )
     if not rows:
-        return Coverage(None, None, None)
+        return Coverage(None, None, None, None)
     r = rows[0]
-    return Coverage(r["source"], _as_date(r["data_from"]), _as_date(r["data_until"]))
+    return Coverage(r["source"], r["currency"], _as_date(r["data_from"]), _as_date(r["data_until"]))
 
 
 def _missing_note(cov: Coverage, end: date, fallback: str) -> str | None:
@@ -189,6 +190,7 @@ def sales_vs_baseline(
         end_date=inp.end_date,
         source=_label(table),
         data_source=cov.data_source,
+        currency=cov.currency,
         data_until=cov.data_until,
         days=days,
         note=_missing_note(cov, inp.end_date, "Use sales_by_period for them if available."),
@@ -206,7 +208,8 @@ def item_trends(fetch: Fetch, inp: ItemTrendsInput, tables: GoldTables) -> ItemT
         "sum(CASE WHEN day >= :current_start THEN qty ELSE 0 END) AS qty_current, "
         "sum(CASE WHEN day < :current_start THEN qty ELSE 0 END) AS qty_previous, "
         "sum(CASE WHEN day >= :current_start THEN revenue ELSE 0 END) AS revenue_current, "
-        "sum(CASE WHEN day < :current_start THEN revenue ELSE 0 END) AS revenue_previous "
+        "sum(CASE WHEN day < :current_start THEN revenue ELSE 0 END) AS revenue_previous, "
+        "count(revenue) AS priced_rows "
         f"FROM {table} "
         "WHERE restaurant_id = :restaurant_id AND day BETWEEN :previous_start AND :end_date "
         "GROUP BY menu_item_id",
@@ -219,32 +222,45 @@ def item_trends(fetch: Fetch, inp: ItemTrendsInput, tables: GoldTables) -> ItemT
     )
     cov = coverage(fetch, tables, inp.restaurant_id)
 
+    # Gold leaves revenue NULL on every row of a restaurant whose source has no item prices;
+    # the CASE ... ELSE 0 above would turn that into 0, so priced_rows decides.
+    priced = all(int(r["priced_rows"] or 0) > 0 for r in rows)
     items = []
     for r in rows:
-        current, previous = _money(r["revenue_current"]), _money(r["revenue_previous"])
+        qty_current, qty_previous = int(r["qty_current"] or 0), int(r["qty_previous"] or 0)
+        current = _money(r["revenue_current"]) if priced else None
+        previous = _money(r["revenue_previous"]) if priced else None
         items.append(
             ItemTrend(
                 menu_item_id=int(r["menu_item_id"]),
                 name=str(r["name"]),
-                category=str(r["category"]),
-                active=bool(r["active"]),
-                qty_current=int(r["qty_current"] or 0),
-                qty_previous=int(r["qty_previous"] or 0),
+                category=None if r["category"] is None else str(r["category"]),
+                active=None if r["active"] is None else bool(r["active"]),
+                qty_current=qty_current,
+                qty_previous=qty_previous,
+                qty_change=qty_current - qty_previous,
                 revenue_current=current,
                 revenue_previous=previous,
-                revenue_change=round(current - previous, 2),
-                revenue_change_pct=_change_pct(current, previous),
+                revenue_change=None if current is None else round(current - (previous or 0), 2),
+                revenue_change_pct=None if current is None else _change_pct(current, previous),
             )
         )
-    total_current = round(sum(i.revenue_current for i in items), 2)
-    total_previous = round(sum(i.revenue_previous for i in items), 2)
+    total_current = round(sum(i.revenue_current or 0 for i in items), 2) if priced else None
+    total_previous = round(sum(i.revenue_previous or 0 for i in items), 2) if priced else None
+
+    # Without prices, rank by quantity: same meaning (fell, rose, sold most), honest unit.
+    def change(i: ItemTrend) -> float:
+        return i.revenue_change if i.revenue_change is not None else float(i.qty_change)
+
+    def volume(i: ItemTrend) -> float:
+        return i.revenue_current if i.revenue_current is not None else float(i.qty_current)
 
     if inp.order_by == "drop":
-        items.sort(key=lambda i: (i.revenue_change, i.menu_item_id))
+        items.sort(key=lambda i: (change(i), i.menu_item_id))
     elif inp.order_by == "rise":
-        items.sort(key=lambda i: (-i.revenue_change, i.menu_item_id))
+        items.sort(key=lambda i: (-change(i), i.menu_item_id))
     else:
-        items.sort(key=lambda i: (-i.revenue_current, i.menu_item_id))
+        items.sort(key=lambda i: (-volume(i), i.menu_item_id))
 
     if cov.data_until is not None and not rows:
         note: str | None = (
@@ -258,6 +274,13 @@ def item_trends(fetch: Fetch, inp: ItemTrendsInput, tables: GoldTables) -> ItemT
             f"The lakehouse starts on {cov.data_from.isoformat()}, after the previous window "
             f"starts ({previous_start.isoformat()}): the previous totals are partial."
         )
+    if rows and not priced:
+        no_prices = (
+            f"This restaurant's dataset ({cov.data_source}) has no item prices: revenue per "
+            "dish is unknown (null, not zero) and items are ranked by quantity. Say so instead "
+            "of estimating."
+        )
+        note = no_prices if note is None else f"{note} {no_prices}"
 
     return ItemTrendsResult(
         restaurant_id=inp.restaurant_id,
@@ -268,6 +291,7 @@ def item_trends(fetch: Fetch, inp: ItemTrendsInput, tables: GoldTables) -> ItemT
         order_by=inp.order_by,
         source=_label(table),
         data_source=cov.data_source,
+        currency=cov.currency,
         data_from=cov.data_from,
         data_until=cov.data_until,
         total_revenue_current=total_current,
@@ -300,12 +324,16 @@ def _delivery_group(key: str, r: Row) -> DeliveryGroup | None:
     n = int(r["delivered_orders"] or 0)
     if n == 0:
         return None
+    timed_n = int(r["timed_orders"] or 0)
     promised_n = int(r["promised_count"] or 0)
     distance_n = int(r["distance_count"] or 0)
     return DeliveryGroup(
         key=key,
         delivered_orders=n,
-        mean_delivery_minutes=round(float(r["delivery_minutes_sum"]) / n, 1),
+        timed_orders=timed_n,
+        mean_delivery_minutes=(
+            round(float(r["delivery_minutes_sum"]) / timed_n, 1) if timed_n else None
+        ),
         mean_promised_minutes=(
             round(float(r["promised_minutes_sum"]) / promised_n, 1) if promised_n else None
         ),
@@ -318,6 +346,7 @@ def _delivery_group(key: str, r: Row) -> DeliveryGroup | None:
 
 _SUMS = (
     "delivered_orders",
+    "timed_orders",
     "delivery_minutes_sum",
     "promised_minutes_sum",
     "promised_count",
@@ -364,6 +393,14 @@ def delivery_performance(
 
         groups.sort(key=sort_key)
 
+    overall = _delivery_group("all", totals)
+    note = _missing_note(cov, inp.end_date, "Use delivery_times for them if available.")
+    if overall is not None and overall.timed_orders == 0:
+        untimed = (
+            f"This restaurant's dataset ({cov.data_source}) records no delivery time: "
+            "mean_delivery_minutes is unknown (null, not zero). Say so instead of estimating."
+        )
+        note = untimed if note is None else f"{note} {untimed}"
     return DeliveryPerformanceResult(
         restaurant_id=inp.restaurant_id,
         start_date=inp.start_date,
@@ -371,8 +408,9 @@ def delivery_performance(
         group_by=inp.group_by,
         source=_label(table),
         data_source=cov.data_source,
+        currency=cov.currency,
         data_until=cov.data_until,
-        overall=_delivery_group("all", totals),
+        overall=overall,
         groups=groups,
-        note=_missing_note(cov, inp.end_date, "Use delivery_times for them if available."),
+        note=note,
     )

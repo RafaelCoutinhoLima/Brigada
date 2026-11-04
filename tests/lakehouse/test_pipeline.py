@@ -15,6 +15,7 @@ pytest.importorskip("pyspark")
 from brigada_lakehouse import common, gold  # noqa: E402
 from brigada_lakehouse.build import SOURCES  # noqa: E402
 from brigada_lakehouse.sources import brigada, delivery_center  # noqa: E402
+from pyspark.sql import functions as F  # noqa: E402
 
 from scripts.export_lakehouse import to_csv  # noqa: E402
 from scripts.seed_data import OUTAGE_RESTAURANT_ID, generate, last_tuesday, planted_facts  # noqa: E402
@@ -176,6 +177,7 @@ def test_gold_delivery_hourly_sums_and_counts(tables: dict[str, Any]) -> None:
     (row,) = dc
     assert (row["day"], row["hour"]) == (date(2021, 1, 4), 21)
     assert row["delivered_orders"] == 1 and row["delivery_minutes_sum"] == 42.5
+    assert row["timed_orders"] == 1
     assert row["distance_count"] == 1 and row["promised_count"] == 0 and row["late_orders"] == 0
     syn = g.where(g.restaurant_id == 1).agg({"promised_count": "sum", "late_orders": "sum"}).first()
     assert syn[0] > 0 and syn[1] > 0  # the synthetic source has promises and late orders
@@ -232,6 +234,69 @@ def test_gold_item_sales_matches_the_order_lines(tables: dict[str, Any]) -> None
     totals = items.agg({"revenue": "sum", "qty": "sum"}).first()
     assert totals["sum(qty)"] == sum(i.qty for i in dataset.order_items)
     assert Decimal(totals["sum(revenue)"]) == sum(i.qty * i.unit_price for i in dataset.order_items)
+
+
+def _silver_orders(spark: Any, rows: list[tuple]) -> Any:
+    """Conformed silver orders: (order_id, restaurant_id, day, hour, status, minutes, km)."""
+    df = spark.createDataFrame(
+        rows,
+        "order_id string, restaurant_id bigint, local_day date, local_hour int, status string, "
+        "delivery_minutes double, distance_km double",
+    )
+    return (
+        df.withColumn("source", F.lit("x"))
+        .withColumn("iso_weekday", common.iso_weekday(F.col("local_day")))
+        .withColumn("channel", F.lit("c"))
+        .withColumn("total", F.lit(10).cast("decimal(12,2)"))
+        .withColumn("promised_minutes", F.lit(None).cast("double"))
+    )
+
+
+def test_item_revenue_without_prices_is_null_not_zero(spark: Any) -> None:
+    d1, d2 = date(2025, 1, 1), date(2025, 1, 2)
+    orders = _silver_orders(
+        spark,
+        [
+            ("a", 7, d1, 20, "completed", None, 2.0),
+            ("b", 7, d2, 20, "completed", None, 3.0),
+            ("p", 8, d1, 20, "completed", None, None),
+        ],
+    )
+    lines = spark.createDataFrame(
+        [("a", 7, 70, 2, None), ("b", 7, 70, 1, None), ("p", 8, 80, 3, Decimal("5.00"))],
+        "order_id string, restaurant_id bigint, menu_item_id bigint, qty int, "
+        "unit_price decimal(10,2)",
+    )
+    lines = common.apply_expectations(lines, common.ORDER_ITEM_EXPECTATIONS)
+    assert lines.count() == 3  # a NULL price is unknown, not invalid
+    menu = spark.createDataFrame(
+        [(7, 70, "Fries", None, None), (7, 71, "Burger", None, None), (8, 80, "Pão", "x", True)],
+        "restaurant_id bigint, menu_item_id bigint, name string, category string, active boolean",
+    )
+    g = gold.gold_item_daily_sales(orders, lines, menu)
+    unpriced = g.where("restaurant_id = 7").collect()
+    assert len(unpriced) == 4  # 2 days x 2 items, zero-filled qty
+    assert all(r["revenue"] is None for r in unpriced)  # never 0, never a partial sum
+    assert sum(r["qty"] for r in unpriced if r["menu_item_id"] == 70) == 3
+    (priced,) = g.where("restaurant_id = 8").collect()
+    assert priced["revenue"] == Decimal("15.00")
+
+
+def test_delivery_hourly_counts_deliveries_without_a_time(spark: Any) -> None:
+    d = date(2025, 1, 1)
+    orders = _silver_orders(
+        spark,
+        [
+            ("a", 7, d, 20, "completed", None, 2.0),  # delivered, no time: counted, untimed
+            ("b", 7, d, 20, "completed", 30.0, 4.0),
+            ("c", 7, d, 20, "completed", None, None),  # nothing says it was delivered
+            ("x", 7, d, 20, "canceled", 10.0, 1.0),
+        ],
+    )
+    (row,) = gold.gold_delivery_hourly(orders).collect()
+    assert row["delivered_orders"] == 2 and row["timed_orders"] == 1
+    assert row["delivery_minutes_sum"] == 30.0
+    assert row["distance_count"] == 2 and row["distance_km_sum"] == 6.0
 
 
 def test_expectations_drop_bad_rows(spark: Any) -> None:
