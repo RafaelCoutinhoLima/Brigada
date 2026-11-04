@@ -258,7 +258,7 @@ async def console_runs(
             for o in orchestrations
         ],
         agents=[
-            AgentInfo(name=s.name, description=s.description, tools=list(s.tools))
+            AgentInfo(name=s.name, description=s.description, tools=list(s.available_tools()))
             for s in specialists.SPECIALISTS.values()
         ],
         runs=[

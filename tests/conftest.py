@@ -8,3 +8,6 @@ os.environ["BRIGADA_NO_DOTENV"] = "1"
 # server falls back to keyword search, and the tests that need vectors pass their own embedder.
 os.environ.pop("OPENROUTER_API_KEY", None)
 os.environ.pop("EMBEDDING_API_KEY", None)
+# Same for the lakehouse: tests that need its tools pass a fake warehouse to build_server.
+for _var in ("DATABRICKS_SERVER_HOSTNAME", "DATABRICKS_HTTP_PATH", "DATABRICKS_TOKEN"):
+    os.environ.pop(_var, None)

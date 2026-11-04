@@ -55,7 +55,8 @@ class Toolbox:
 
 def stdio_server() -> StdioServerParameters:
     """Run the MCP server as a child process. Only the variables it needs are passed on:
-    the default safe set, DATABASE_URL and the embedding key (never a chat model key)."""
+    the default safe set, DATABASE_URL, the embedding key and the lakehouse connection (never
+    a chat model key)."""
     env = get_default_environment()
     env["DATABASE_URL"] = os.environ.get("DATABASE_URL", get_settings().database_url)
     env["TIMEZONE"] = get_settings().timezone  # parent and child must agree on "today"
@@ -67,6 +68,14 @@ def stdio_server() -> StdioServerParameters:
         env["EMBEDDING_API_KEY"] = key
         env["EMBEDDING_MODEL"] = s.embedding_model
         env["OPENROUTER_BASE_URL"] = s.openrouter_base_url
+    # The lakehouse tools (ADR 0009) query a Databricks SQL warehouse: the child gets that
+    # connection only when it is fully configured, so the tools are either complete or absent.
+    if s.lakehouse_enabled:
+        env["DATABRICKS_SERVER_HOSTNAME"] = s.databricks_server_hostname
+        env["DATABRICKS_HTTP_PATH"] = s.databricks_http_path
+        env["DATABRICKS_TOKEN"] = s.databricks_token
+        env["LAKEHOUSE_CATALOG"] = s.lakehouse_catalog
+        env["LAKEHOUSE_SCHEMA"] = s.lakehouse_schema
     return StdioServerParameters(command=sys.executable, args=["-m", "brigada.mcp_server"], env=env)
 
 

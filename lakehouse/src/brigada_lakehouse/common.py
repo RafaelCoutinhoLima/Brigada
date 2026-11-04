@@ -1,0 +1,136 @@
+"""Helpers shared by every source and by the gold layer.
+
+Time zones: every source ends up with a local wall clock (``created_at_local``, TIMESTAMP_NTZ in
+``LOCAL_TZ``). The conversions below never depend on the Spark session time zone (a Databricks
+workspace and a laptop disagree on it): instants are turned into UTC wall clocks through epoch
+seconds, and ``convert_timezone`` works on NTZ values.
+"""
+
+from pyspark.sql import Column, DataFrame, SparkSession, Window
+from pyspark.sql import functions as F
+
+LOCAL_TZ = "America/Sao_Paulo"
+
+# The conformed silver contract every source maps to (see sources/). Gold reads only these.
+RESTAURANT_COLUMNS = ("restaurant_id", "source", "source_id", "name", "segment", "city", "state")
+ORDER_COLUMNS = (
+    "source",
+    "order_id",
+    "restaurant_id",
+    "created_at_local",
+    "local_day",
+    "local_hour",
+    "iso_weekday",
+    "channel",
+    "status",  # completed | canceled
+    "total",
+    "delivery_minutes",  # order to delivery; null when unknown or implausible
+    "promised_minutes",  # what the customer was promised; null when the source has none
+    "distance_km",
+)
+ORDER_ITEM_COLUMNS = ("source", "order_id", "restaurant_id", "menu_item_id", "qty", "unit_price")
+MENU_ITEM_COLUMNS = ("restaurant_id", "menu_item_id", "name", "category", "active")
+
+ORDER_STATUSES = ("completed", "canceled")
+
+# Rules every source's orders must pass (name -> SQL predicate). The pipeline drops failing rows
+# and counts them in the event log (``dlt.expect_all_or_drop``); the tests apply the same ones.
+ORDER_EXPECTATIONS = {
+    "id_present": "order_id IS NOT NULL",
+    "restaurant_present": "restaurant_id IS NOT NULL",
+    "created_at_parsed": "created_at_local IS NOT NULL",
+    "channel_present": "channel IS NOT NULL",
+    "known_status": "status IN ('completed', 'canceled')",
+    "non_negative_total": "total >= 0",
+}
+ORDER_ITEM_EXPECTATIONS = {
+    "order_present": "order_id IS NOT NULL",
+    "item_present": "menu_item_id IS NOT NULL",
+    "positive_qty": "qty > 0",
+    "non_negative_price": "unit_price >= 0",
+}
+MENU_ITEM_EXPECTATIONS = {
+    "id_present": "menu_item_id IS NOT NULL",
+    "restaurant_present": "restaurant_id IS NOT NULL",
+}
+
+
+def read_raw(
+    spark: SparkSession, raw_path: str, table: str, *, encoding: str = "UTF-8"
+) -> DataFrame:
+    """Bronze: one raw table (``<raw_path>/<table>/*.csv``), every column a string, plus the
+    source file and the read time."""
+    raw = (
+        spark.read.option("header", True)
+        .option("escape", '"')
+        .option("multiLine", True)
+        .option("encoding", encoding)
+        .csv(f"{raw_path}/{table}/")
+    )
+    return raw.withColumn("_source_file", F.col("_metadata.file_path")).withColumn(
+        "_ingested_at", F.current_timestamp()
+    )
+
+
+def apply_expectations(df: DataFrame, expectations: dict[str, str]) -> DataFrame:
+    """Keep the rows that pass every predicate (what ``expect_all_or_drop`` does)."""
+    for predicate in expectations.values():
+        df = df.where(F.expr(predicate))
+    return df
+
+
+def try_cast(column: str, sql_type: str) -> Column:
+    """Cast that turns a malformed value into NULL. Plain casts raise under ANSI mode (the
+    default on Databricks and Spark 4), which would fail the whole pipeline on one bad row
+    instead of letting the expectations drop and count it."""
+    return F.expr(f"try_cast(`{column}` AS {sql_type})")
+
+
+def clean_text(column: str) -> Column:
+    """Trimmed, inner whitespace collapsed; empty becomes NULL."""
+    text = F.regexp_replace(F.trim(F.col(column)), r"\s+", " ")
+    return F.when(text == "", None).otherwise(text)
+
+
+def utc_text_to_local(column: str, fmt: str) -> Column:
+    """A UTC timestamp written as text in ``fmt`` -> local wall clock (TIMESTAMP_NTZ).
+
+    Malformed or impossible values (2/30) become NULL. The offset is appended so the parse is
+    an exact instant whatever the session zone; epoch seconds then give the UTC wall clock.
+    """
+    instant = F.expr(f"try_to_timestamp(concat(`{column}`, ' +0000'), '{fmt} Z')")
+    utc = F.expr("timestamp_ntz'1970-01-01 00:00:00'") + F.make_dt_interval(
+        F.lit(0), F.lit(0), F.lit(0), F.unix_seconds(instant).cast("decimal(18,6)")
+    )
+    return F.convert_timezone(F.lit("UTC"), F.lit(LOCAL_TZ), utc)
+
+
+def utc_ntz_to_local(utc: Column) -> Column:
+    return F.convert_timezone(F.lit("UTC"), F.lit(LOCAL_TZ), utc)
+
+
+def iso_weekday(day: Column) -> Column:
+    # dayofweek: 1 = Sunday ... 7 = Saturday. ISO: 1 = Monday ... 7 = Sunday.
+    return ((F.dayofweek(day) + 5) % 7) + 1
+
+
+def with_local_parts(df: DataFrame) -> DataFrame:
+    """Add local_day, local_hour and iso_weekday from created_at_local."""
+    return (
+        df.withColumn("local_day", F.to_date("created_at_local"))
+        .withColumn("local_hour", F.hour("created_at_local"))
+        .withColumn("iso_weekday", iso_weekday(F.col("local_day")))
+    )
+
+
+def latest_per_key(df: DataFrame, keys: list[str]) -> DataFrame:
+    """One row per key: the last one read (re-uploads may repeat rows)."""
+    if "_ingested_at" not in df.columns:
+        return df.dropDuplicates(keys)
+    w = Window.partitionBy(*keys).orderBy(F.col("_ingested_at").desc())
+    return df.withColumn("_rn", F.row_number().over(w)).where("_rn = 1").drop("_rn")
+
+
+def conform(df: DataFrame, columns: tuple[str, ...]) -> DataFrame:
+    """Exactly the contract's columns, in order (fails loudly if a source forgot one)."""
+    return df.select(*columns)

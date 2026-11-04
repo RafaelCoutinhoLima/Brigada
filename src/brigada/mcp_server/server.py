@@ -31,6 +31,21 @@ from opentelemetry import trace
 from opentelemetry.trace import Span
 from pydantic import BaseModel, ValidationError
 
+from brigada.config import get_settings
+from brigada.lakehouse import queries as lakehouse_queries
+from brigada.lakehouse.models import (
+    DeliveryPerfGroupBy,
+    DeliveryPerformanceInput,
+    DeliveryPerformanceResult,
+    ItemTrendsInput,
+    ItemTrendsResult,
+    SalesVsBaselineInput,
+    SalesVsBaselineResult,
+    TrendDays,
+    TrendLimit,
+    TrendOrderBy,
+)
+from brigada.lakehouse.warehouse import Lakehouse, from_settings
 from brigada.mcp_server import audit, inventory, pending, queries, search
 from brigada.mcp_server.db import Conn, connect
 from brigada.mcp_server.errors import DomainError
@@ -121,6 +136,7 @@ async def _run[I: BaseModel, O: BaseModel](fn: Callable[[Conn, I], O], inp: I) -
 
     def call() -> O:
         with connect() as conn:
+            _require_operational_data(conn, inp)
             return fn(conn, inp)
 
     try:
@@ -132,6 +148,24 @@ async def _run[I: BaseModel, O: BaseModel](fn: Callable[[Conn, I], O], inp: I) -
         # never hand them to the model.
         logger.exception("database error in %s", getattr(fn, "__name__", fn))
         raise ToolError("internal database error; the call was not completed") from None
+
+
+def _require_operational_data(conn: Conn, inp: BaseModel) -> None:
+    """A restaurant registered from a real dataset has no rows in Postgres: every Postgres tool
+    would answer "zero", which reads as a fact. Refuse and point at the lakehouse tools."""
+    restaurant_id = getattr(inp, "restaurant_id", None)
+    if restaurant_id is None:
+        return
+    row = conn.execute(
+        "SELECT data_source, lakehouse_source FROM restaurants WHERE id = %s", (restaurant_id,)
+    ).fetchone()
+    if row is not None and row["data_source"] == "lakehouse":
+        raise DomainError(
+            f"restaurant {restaurant_id} comes from the {row['lakehouse_source']} dataset, which "
+            "lives only in the lakehouse: this tool reads Brigada's operational database and "
+            "has no data for it. Use sales_vs_baseline, item_trends or delivery_performance, or "
+            "tell the owner this information is not available for this restaurant."
+        )
 
 
 def _audit_result(result: CallToolResult | InputRequiredResult) -> Any:
@@ -341,10 +375,14 @@ def _check_scope(arguments: dict[str, Any], scope: int | None, *, registered: bo
 QUERY_CACHE_SIZE = 256
 
 
-def build_server(embedder: Embedder | None = None) -> BrigadaMCPServer:
+def build_server(
+    embedder: Embedder | None = None, lakehouse: Lakehouse | None = None
+) -> BrigadaMCPServer:
     """Create the server and register the tools. Opens no database connection.
 
     ``embedder`` embeds search queries; by default the configured model, created on first use.
+    ``lakehouse`` serves the lakehouse tools; by default the configured SQL warehouse, and
+    without one (the default settings) those tools are not registered at all.
     """
     server = BrigadaMCPServer(name="brigada", instructions=INSTRUCTIONS)
     embedders: list[Embedder] = [embedder] if embedder is not None else []
@@ -545,6 +583,9 @@ def build_server(embedder: Embedder | None = None) -> BrigadaMCPServer:
         return await _run(functools.partial(pending.propose_promotion, run_id=run_id), inp)
 
     _register_inventory(server)
+    lake = lakehouse or from_settings(get_settings())
+    if lake is not None:
+        _register_lakehouse(server, lake)
     return server
 
 
@@ -655,6 +696,97 @@ def _register_inventory(server: BrigadaMCPServer) -> None:
         )
         run_id = audit.current_run_id.get()
         return await _run(functools.partial(pending.propose_purchase, run_id=run_id), inp)
+
+
+async def _run_lakehouse[I: BaseModel, O: BaseModel](
+    fn: Callable[[lakehouse_queries.Fetch, I, lakehouse_queries.GoldTables], O],
+    inp: I,
+    lake: Lakehouse,
+) -> O:
+    """Like ``_run``, against the SQL warehouse: one connection per call, on a worker thread."""
+
+    def call() -> O:
+        with lake.open() as fetch:
+            return fn(fetch, inp, lake.tables)
+
+    try:
+        return await anyio.to_thread.run_sync(call)
+    except DomainError as exc:
+        raise ToolError(str(exc)) from exc
+    except Exception:
+        # Driver errors carry the workspace host and fragments of the query: log, never hand
+        # them to the model. The Postgres tools still answer, so say which one to use.
+        logger.exception("lakehouse error in %s", getattr(fn, "__name__", fn))
+        raise ToolError(
+            "lakehouse query failed (warehouse unavailable or tables missing); "
+            "use sales_by_period or top_items instead"
+        ) from None
+
+
+def _register_lakehouse(server: BrigadaMCPServer, lake: Lakehouse) -> None:
+    """Gold tables of the Databricks lakehouse (ADR 0009). Read-only, fixed SQL."""
+
+    @server.tool(annotations=READ_ONLY)
+    async def sales_vs_baseline(
+        restaurant_id: RestaurantId, start_date: date, end_date: date
+    ) -> SalesVsBaselineResult:
+        """Each local day (max 31) next to its normal level: revenue and orders, total and per
+        channel (app, telefone, balcao), against the mean of the same weekday in the previous
+        4 weeks, with the change in %. Use it first to explain a drop or a spike in one call
+        ("why did sales fall on Tuesday?"): a channel at -100% while the others are normal is
+        the likely cause. Data comes from the lakehouse and may lag a day: check data_until.
+        """
+        inp = _validate(
+            SalesVsBaselineInput,
+            restaurant_id=restaurant_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return await _run_lakehouse(lakehouse_queries.sales_vs_baseline, inp, lake)
+
+    @server.tool(annotations=READ_ONLY)
+    async def item_trends(
+        restaurant_id: RestaurantId,
+        end_date: date,
+        days: TrendDays = 7,
+        limit: TrendLimit = 10,
+        order_by: TrendOrderBy = "drop",
+    ) -> ItemTrendsResult:
+        """Per menu item: qty and revenue in the last `days` days up to end_date vs the `days`
+        days before, with the change in R$ and %. order_by: drop (biggest fall first), rise,
+        revenue. Use for "which dish sold less this week?". Data comes from the lakehouse and
+        may lag a day: check data_until.
+        """
+        inp = _validate(
+            ItemTrendsInput,
+            restaurant_id=restaurant_id,
+            end_date=end_date,
+            days=days,
+            limit=limit,
+            order_by=order_by,
+        )
+        return await _run_lakehouse(lakehouse_queries.item_trends, inp, lake)
+
+    @server.tool(annotations=READ_ONLY)
+    async def delivery_performance(
+        restaurant_id: RestaurantId,
+        start_date: date,
+        end_date: date,
+        group_by: DeliveryPerfGroupBy = "none",
+    ) -> DeliveryPerformanceResult:
+        """Delivery time per local day, weekday, hour or weekday+hour: mean minutes from order
+        to delivery, mean promised minutes and share delivered late (when the restaurant's
+        dataset has promises), mean distance in km (when it has distances). Works for every
+        restaurant in the lakehouse, including the real datasets. Check data_until.
+        """
+        inp = _validate(
+            DeliveryPerformanceInput,
+            restaurant_id=restaurant_id,
+            start_date=start_date,
+            end_date=end_date,
+            group_by=group_by,
+        )
+        return await _run_lakehouse(lakehouse_queries.delivery_performance, inp, lake)
 
 
 def main() -> None:

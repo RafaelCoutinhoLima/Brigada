@@ -29,6 +29,14 @@ class Specialist:
     description: (
         str  # what the planner reads to decide who gets each step; the prompt file is <name>.md
     )
+    # Served from the Databricks lakehouse (ADR 0009): added only when it is configured.
+    lakehouse_tools: tuple[str, ...] = ()
+
+    def available_tools(self) -> tuple[str, ...]:
+        """The tools this specialist gets in this deployment."""
+        if self.lakehouse_tools and get_settings().lakehouse_enabled:
+            return self.tools + self.lakehouse_tools
+        return self.tools
 
 
 SALES = Specialist(
@@ -36,6 +44,7 @@ SALES = Specialist(
     tools=("sales_by_period", "top_items", "list_menu_items"),
     description="Faturamento e pedidos por período, dia, canal, hora ou dia da semana; "
     "itens mais vendidos.",
+    lakehouse_tools=("sales_vs_baseline", "item_trends"),
 )
 MENU = Specialist(
     name="menu",
@@ -56,6 +65,7 @@ OPERATIONS = Specialist(
     tools=("delivery_times", "sales_by_period"),
     description="Tempos de entrega prometido vs real por dia da semana e hora; volume de "
     "pedidos por hora e canal para entender a carga da operação.",
+    lakehouse_tools=("delivery_performance",),
 )
 
 INVENTORY = Specialist(
@@ -117,7 +127,7 @@ async def ask(
     """
     run_id = run_id or uuid.uuid4().hex
     async with mcp_toolbox(
-        run_id, restaurant_id, specialist.tools, server, tainted=tainted
+        run_id, restaurant_id, specialist.available_tools(), server, tainted=tainted
     ) as toolbox:
         agent = _agent(
             specialist,
@@ -161,7 +171,7 @@ async def resume(
     specialist = get_specialist(record.agent)
     tainted = record.tainted or read_untrusted(record.messages)
     async with mcp_toolbox(
-        run_id, record.restaurant_id, specialist.tools, server, tainted=tainted
+        run_id, record.restaurant_id, specialist.available_tools(), server, tainted=tainted
     ) as toolbox:
         agent = _agent(
             specialist,

@@ -2,7 +2,12 @@ import os
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Unity Catalog names go into SQL text (identifiers cannot be bound parameters), so only plain
+# identifiers are accepted. They come from the configuration, never from the model.
+_IDENTIFIER = r"^[A-Za-z_][A-Za-z0-9_]{0,254}$"
 
 
 class Settings(BaseSettings):
@@ -32,6 +37,14 @@ class Settings(BaseSettings):
     # question; the model file must exist (it is not in git nor in the Docker image).
     router_enabled: bool = False
     router_model_path: str = "models/router.joblib"
+    # Databricks lakehouse (lakehouse/, ADR 0009): gold tables read through a SQL warehouse by
+    # the sales_vs_baseline and item_trends tools. All three connection values set = the tools
+    # are registered and the sales specialist gets them; any empty = off (the default).
+    databricks_server_hostname: str = ""
+    databricks_http_path: str = ""
+    databricks_token: str = ""
+    lakehouse_catalog: str = Field(default="workspace", pattern=_IDENTIFIER)
+    lakehouse_schema: str = Field(default="brigada", pattern=_IDENTIFIER)
     max_agent_steps: int = 10
     tool_timeout_seconds: float = 15.0
     timezone: str = "America/Sao_Paulo"
@@ -47,6 +60,12 @@ class Settings(BaseSettings):
         if self.model_provider == "openrouter":
             return self.openrouter_api_key
         return self.anthropic_api_key
+
+    @property
+    def lakehouse_enabled(self) -> bool:
+        return bool(
+            self.databricks_server_hostname and self.databricks_http_path and self.databricks_token
+        )
 
     def api_key_scopes(self) -> dict[str, frozenset[int]]:
         scopes: dict[str, frozenset[int]] = {}

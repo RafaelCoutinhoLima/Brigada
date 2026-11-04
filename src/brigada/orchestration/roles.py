@@ -51,7 +51,7 @@ def planner(
     question: str = "",
 ) -> Role:
     catalog = "\n".join(
-        f"- {s.name}: {s.description} Ferramentas: {', '.join(s.tools)}."
+        f"- {s.name}: {s.description} Ferramentas: {', '.join(s.available_tools())}."
         for s in SPECIALISTS.values()
     )
     prefix = f"{load_prompt('planner').text}{catalog}\n"
