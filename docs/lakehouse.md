@@ -1,14 +1,15 @@
 # Lakehouse no Databricks Free Edition
 
 Passo a passo para colocar o lakehouse da Brigada de pé numa conta gratuita do Databricks,
-tratar uma base real (Delivery Center) junto com os dados sintéticos e ligar as ferramentas
+tratar duas bases reais (Delivery Center, do Brasil, e Zomato, da Índia) junto com os dados
+sintéticos e ligar as ferramentas
 `sales_vs_baseline`, `item_trends` (Vendas) e `delivery_performance` (Operações). A decisão e
 os trade-offs estão no [ADR 0009](adr/0009-lakehouse-databricks.md).
 
 ```
 Postgres (sintético) ─export─┐
-                             ├─► Volume raw/<fonte>/ ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► agentes
-Kaggle (Delivery Center) ────┘                        └── pipeline Lakeflow (serverless) ──┘
+Kaggle (Delivery Center) ────┼─► Volume raw/<fonte>/ ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► agentes
+Kaggle (Zomato) ─────────────┘                        └── pipeline Lakeflow (serverless) ──┘
 ```
 
 | Peça | Arquivo |
@@ -32,13 +33,19 @@ uv sync --extra lakehouse --group spark
 uv run pytest tests/lakehouse
 ```
 
-Esses testes geram o seed e um recorte do Delivery Center com os defeitos da base real, rodam
-bronze, silver e gold num Spark local e executam o SQL exato das ferramentas por cima do gold.
-Com a base real baixada (passo 4), dá para rodar o pipeline inteiro sobre ela:
+Esses testes geram o seed e recortes do Delivery Center e do Zomato escritos à mão com os
+defeitos de cada base real, rodam bronze, silver e gold num Spark local e executam o SQL exato
+das ferramentas por cima do gold. Com as bases reais baixadas (passo 4), dá para rodar o
+pipeline inteiro sobre elas:
 
 ```bash
-DELIVERY_CENTER_DIR=~/Downloads/delivery-center uv run pytest tests/lakehouse -k real -s
+DELIVERY_CENTER_DIR=~/Downloads/delivery-center \
+ZOMATO_FILE=~/Downloads/zomato/order_history_kaggle_data.csv \
+  uv run pytest tests/lakehouse -k real -s
 ```
+
+Saída esperada: `368999 raw orders, 321733 kept, 384 FOOD restaurants` no Delivery Center e
+`21321 raw orders, 21315 kept` com 21 filiais no Zomato.
 
 ## 1. Criar a conta
 
@@ -101,6 +108,17 @@ uv run python scripts/export_lakehouse.py --source seed --end-date 2026-10-27   
 uv run python scripts/upload_source.py delivery_center ~/Downloads/delivery-center
 ```
 
+**Zomato** (base real, 21 mil pedidos de 21 filiais em Delhi NCR, de set/2024 a jan/2025, em
+rúpias):
+
+1. Baixe o histórico de pedidos do Zomato no Kaggle (arquivo `order_history_kaggle_data.csv`)
+   e descompacte numa pasta.
+2. Suba a pasta como veio; o arquivo vira a tabela `orders`:
+
+```bash
+uv run python scripts/upload_source.py zomato ~/Downloads/zomato
+```
+
 Tudo vai para `/Volumes/workspace/brigada/raw/<fonte>/<tabela>/`. Rodar de novo substitui os
 arquivos. Os dados não entram no repositório.
 
@@ -136,7 +154,20 @@ ORDER BY completed_orders DESC LIMIT 10;
 
 Para olhar o tratamento, abra `silver_delivery_center_orders` no grafo do pipeline: a aba de
 qualidade mostra quantos pedidos cada expectativa descartou (valor zerado ou absurdo, data
-impossível, canal desconhecido).
+impossível, canal desconhecido). Em `silver_zomato_orders` devem aparecer 6 descartados por
+`known_status` (3 "Picked up" e 3 "Return cancelled", pedidos que nunca fecharam).
+
+Cada restaurante traz a própria moeda e o próprio fuso:
+
+```sql
+SELECT source, currency, timezone, count(*) AS restaurants, min(data_from), max(data_until)
+FROM workspace.brigada.gold_restaurants
+GROUP BY ALL;
+```
+
+O Zomato não tem preço por prato nem tempo de entrega: em `gold_item_daily_sales` a coluna
+`revenue` dos restaurantes dele é NULL (a quantidade está certa), e em `gold_delivery_hourly`
+`timed_orders` é 0 (a distância está lá). Os comentários de cliente ficam só no bronze.
 
 ## 6. Ligar as ferramentas na Brigada
 
@@ -165,8 +196,9 @@ uv run python scripts/register_lakehouse_restaurants.py --min-orders 500 --dry-r
 uv run python scripts/register_lakehouse_restaurants.py --min-orders 500
 ```
 
-   O id de uma loja do Delivery Center é `1000000 + store_id` (a loja 53 vira `1000053`).
-   Para o console, inclua os ids na chave: `API_KEYS=dev-key=1,2,3,1000053`.
+   O id de uma loja do Delivery Center é `1000000 + store_id` (a loja 53 vira `1000053`) e o
+   de uma filial do Zomato é `100000000 + Restaurant ID` (a 20320607 vira `120320607`). Para
+   o console, inclua os ids na chave: `API_KEYS=dev-key=1,2,3,1000053,120320607`.
 
 5. Teste:
 
@@ -177,12 +209,16 @@ uv run python -m brigada.runtime "Por que minhas vendas caíram na última terç
 # real: a base vai até 30/04/2021, então "hoje" precisa estar logo depois
 uv run python -m brigada.orchestration "Como foram minhas vendas em abril e onde a entrega demora mais?" \
   --restaurant 1000053 --today 2021-05-01
+# Zomato: vai até 31/01/2025 e os valores voltam em rúpias (currency = INR)
+uv run python -m brigada.orchestration "Que prato caiu mais na última semana de janeiro?" \
+  --restaurant 120320607 --today 2025-02-01
 ```
 
 Nos restaurantes reais, as ferramentas do Postgres respondem que o restaurante só existe no
-lakehouse, e os agentes usam as do lakehouse. Perguntas que a base não responde (que prato
-vendeu mais, avaliações, tempo prometido) recebem um "essa informação não existe para este
-restaurante", não um número inventado.
+lakehouse, e os agentes usam as do lakehouse. Perguntas que a base não responde recebem um
+"essa informação não existe para este restaurante", não um número inventado: no Delivery
+Center, que prato vendeu mais, avaliações e tempo prometido; no Zomato, faturamento por prato
+(só a quantidade existe) e tempo de entrega.
 
 No console (`/console`), o especialista de Vendas mostra as duas ferramentas novas.
 
@@ -197,5 +233,5 @@ No console (`/console`), o especialista de Vendas mostra as duas ferramentas nov
 | Timeout na primeira pergunta | Warehouse ligando: aumente `TOOL_TIMEOUT_SECONDS` |
 
 O Free Edition não pode ser usado para fins comerciais. O dado sintético é gerado por
-`scripts/seed_data.py`; o Delivery Center é público no Kaggle, anonimizado pelos autores, e fica
-fora do repositório.
+`scripts/seed_data.py`; o Delivery Center e o Zomato são públicos no Kaggle (o Delivery Center
+anonimizado pelos autores, o Zomato com o cliente num hash) e ficam fora do repositório.

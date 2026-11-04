@@ -1,7 +1,7 @@
 # 0009. Lakehouse no Databricks: pipeline medalhão com dados reais, lido por ferramentas MCP fixas
 
 - Status: proposta
-- Data: 2026-11-03
+- Data: 2026-11-03 (fonte Zomato, fuso e moeda por fonte: 2026-11-04)
 
 ## Contexto
 
@@ -69,9 +69,24 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   `lakehouse/src/brigada_lakehouse/sources/` que leva o bronze dela ao mesmo silver conformado
   (restaurantes, pedidos com hora local, status, canal, tempo de entrega, distância; itens
   quando a base tem). O gold só lê esse contrato, então as ferramentas e os agentes não mudam
-  quando entra uma fonte nova. Fontes agora: `brigada` (sintético) e `delivery_center`. A
-  próxima é o Zomato, quando o arquivo estiver disponível.
-- **Ids sem colisão:** restaurante do Delivery Center vira `1_000_000 + store_id`.
+  quando entra uma fonte nova. Fontes agora: `brigada` (sintético), `delivery_center` (Brasil)
+  e `zomato` (Índia).
+- **Fuso por fonte:** cada módulo declara `TIMEZONE` (`America/Sao_Paulo` no sintético e no
+  Delivery Center, `Asia/Kolkata` no Zomato), e as funções de conversão de `common.py` recebem
+  o fuso como argumento, em vez de um `LOCAL_TZ` fixo. O dia e a hora locais continuam
+  calculados uma vez no silver; `gold_restaurants.timezone` diz qual fuso vale para cada
+  restaurante. Alternativa descartada: guardar tudo em UTC e converter na consulta, o que
+  espalharia a regra de fuso pelas ferramentas e quebraria o zero-fill por dia local.
+- **Moeda por fonte:** cada módulo declara `CURRENCY` (ISO 4217: `BRL`, `INR`). Os valores
+  ficam na moeda de origem, nunca convertidos: uma taxa de câmbio de 2024 aplicada a pedidos
+  de 2021 seria um número inventado. `currency` entra no contrato de restaurantes, em
+  `gold_restaurants` e no resultado das três ferramentas, e os prompts de Vendas e Operações
+  mandam usar a moeda devolvida. As ferramentas do Postgres continuam em reais.
+- **Ids sem colisão, cabendo em `integer`:** restaurante do Delivery Center vira
+  `1_000_000 + store_id` (até 1.004.679) e do Zomato vira `100_000_000 + id` (até
+  ~121,5 milhões, abaixo do limite de 2.147.483.647 de `restaurants.id`). Um id do Zomato que
+  passaria do intervalo vira NULL e a expectativa `restaurant_present` descarta e conta o
+  pedido, em vez de colidir em silêncio.
 - **Ingestão:** `scripts/export_lakehouse.py` exporta `restaurants`, `menu_items`, `orders` e
   `order_items` em CSV para um Volume do Unity Catalog. `reviews` fica de fora de propósito: é
   texto de cliente (onde mora a prompt injection) e nada no lakehouse precisa dele.
@@ -95,6 +110,62 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   - só lojas FOOD viram restaurantes (384 de 951).
   Resultado na base real: 368.999 pedidos brutos, 321.733 no silver (os outros são de lojas de
   varejo ou falharam numa expectativa).
+- **O que o profiling do Zomato achou, e o tratamento** (detalhes em `sources/zomato.py`). É
+  um arquivo só, `order_history_kaggle_data.csv`: 21.321 pedidos de set/2024 a jan/2025, 21
+  filiais de 6 marcas em Delhi NCR, em rúpias.
+  - horários **já em hora local da Índia**, não em UTC: almoço com pico às 13h, jantar às
+    20h e nenhum pedido entre 5h e 10h (em UTC o pico do jantar cairia às 1h30 na Índia).
+    Lidos como o relógio que são, sem conversão. Os 2.672 pedidos da madrugada (0h a 4h) ficam
+    no dia do calendário, como nas outras fontes, e não no "dia de operação" anterior;
+  - os cabeçalhos têm espaços e parênteses ("Restaurant discount (Flat offs, Freebies &
+    others)"), que o Delta recusa: o bronze passa a gravar nomes de coluna em snake_case (só o
+    cabeçalho muda; os valores continuam como vieram, e os nomes das outras fontes já eram
+    assim);
+  - itens em texto, `"1 x Animal Fries, 2 x Salted Fries"`: todas as 38.232 partes seguem o
+    padrão `N x nome`. O mesmo prato aparece duas vezes no mesmo pedido (80 pedidos) e com
+    caixa diferente ("OG"/"Og Cheese Burger"): as linhas são somadas pelo nome normalizado;
+  - `menu_item_id` = hash de 63 bits (`xxhash64`) de restaurante + nome normalizado: estável
+    entre execuções e por filial, porque 190 dos 244 pratos são vendidos por mais de uma.
+    Alternativa descartada: um id sequencial por ordem alfabética, que muda quando entra um
+    prato novo;
+  - **não há preço por item**, só o subtotal do pedido: `unit_price` fica NULL (a expectativa
+    passou a ser `unit_price IS NULL OR unit_price >= 0`), e a receita por prato fica NULL em
+    todas as linhas do restaurante. Antes, o `coalesce(revenue, 0)` do gold teria escrito zero.
+    Estimar o preço a partir de pedidos de um prato só foi descartado: mistura descontos e
+    mudanças de cardápio, e seria um número calculado apresentado como fato;
+  - **não há tempo de entrega**: `KPT duration` é o preparo na cozinha e `Rider wait time` a
+    espera do entregador, nenhum dos dois é do pedido até a porta. `delivery_minutes` fica NULL
+    e o `gold_delivery_hourly` passou a contar os pedidos entregues mesmo sem tempo
+    (`delivered_orders`, com `timed_orders` à parte), para a distância continuar aparecendo;
+  - distância em faixas inteiras ("3km") e `<1km`, que vira 0,5 km: é uma faixa, não falta de
+    dado, e nunca zero;
+  - status: Delivered vira completed; Rejected, Returned e Timed out viram canceled. Picked up
+    e Return cancelled (3 cada, pedidos que nunca fecharam) ficam sem mapa e a expectativa
+    `known_status` descarta e conta;
+  - um canal só: `Delivery` é "Zomato Delivery" em 100% dos pedidos. Um canal que nunca aparece
+    (entrega própria) não entra em `SOURCE_CHANNELS`, porque o zero-fill criaria zeros
+    inventados; um valor desconhecido é descartado pela expectativa `channel_present`;
+  - `Total` = subtotal + embalagem - descontos em todos os pedidos, sem zero nem absurdo (o
+    maior, ₹12.663, é um pedido de 20 pizzas). Mesmo assim `total > 0` é expectativa;
+  - a mesma marca tem várias filiais (Aura Pizzas, 5): o nome mostrado é "Marca (subzone)", e
+    três ids que aparecem em dois subzones ficam com o mais frequente. Cidade "Delhi NCR", sem
+    estado (a região cobre três);
+  - **texto de cliente não entra**: `Review` (296 pedidos), `Instructions` (720) e as tags de
+    reclamação são texto livre não confiável (ADR 0002), e `Customer ID` identifica uma
+    pessoa. Ficam no bronze, nunca chegam ao silver nem a uma ferramenta; há teste com uma
+    instrução plantada no comentário. A nota de 1 a 5 (12% dos pedidos, todos entregues) vai
+    até o silver em `rating`, mas nenhuma ferramenta a expõe por enquanto: quem avalia escolheu
+    avaliar, então a média é enviesada e precisa de cuidado antes de virar resposta.
+  - nomes de prato, marca, subzone e cidade chegam ao modelo (`item_trends`,
+    `gold_restaurants`) e vêm de um arquivo externo: só passam se parecerem nomes (letras de
+    qualquer alfabeto, dígitos, espaço e pontuação básica, até 80 caracteres,
+    `common.SAFE_NAME`). O resto vira NULL e é descartado e contado. Todos os nomes do arquivo
+    real passam. Isso tira marcação e textos longos do caminho, mas não torna o nome confiável:
+    uma frase curta em letras ainda passaria. Alternativa descartada: marcar `item_trends`
+    como saída não confiável, o que bloquearia as ferramentas de escrita em qualquer run que a
+    usasse, inclusive no sintético.
+  Resultado na base real: 21.321 pedidos brutos, 21.315 no silver (21.131 entregues, 184
+  cancelados), 21 restaurantes, 38.137 linhas de item e 915 pratos somando todas as filiais.
 - **Restaurante real no Postgres é só cadastro.** Runs, auditoria e chaves de API referenciam
   `restaurants.id`, então `scripts/register_lakehouse_restaurants.py` registra os restaurantes
   do gold com `data_source = 'lakehouse'` (migration 0010). As ferramentas do Postgres recusam
@@ -124,6 +195,10 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   ela o servidor e o especialista de Vendas ficam exatamente como antes.
 - **Frescor explícito:** toda resposta traz `data_until`, e `note` avisa quando o dia pedido
   não está no lakehouse ("faltando, não zero"), apontando para `sales_by_period`.
+- **Dado que a fonte não tem é NULL e vem explicado:** sem itens, `item_trends` diz que a base
+  não tem linhas de pedido; sem preço, devolve receita nula, ordena por quantidade e diz por
+  quê; sem tempo de entrega, `delivery_performance` devolve `mean_delivery_minutes` nulo e
+  avisa no `note`.
 - **Erros:** falha do driver vira uma mensagem genérica para o modelo, que manda usar as
   ferramentas do Postgres; o detalhe (host, trecho da query) só vai para o log.
 
@@ -135,8 +210,9 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   - prato que parou de vender aparece com zero, não some;
   - o projeto ganha a forma de um pipeline de dados de produção: medalhão, expectativas de
     qualidade, deploy declarativo, serverless, e dado real sujo tratado de forma auditável;
-  - os mesmos agentes respondem sobre restaurantes reais, e dizem quando a base não tem o dado
-    (itens, promessa de entrega) em vez de inventar.
+  - os mesmos agentes respondem sobre restaurantes reais de dois países, em reais e em
+    rúpias, e dizem quando a base não tem o dado (itens, preço por prato, promessa ou tempo de
+    entrega) em vez de inventar.
 - **Piora:**
   - mais uma peça: conta no Databricks, token, export e job para rodar;
   - o gold pode estar atrasado: o export não é contínuo (sem CDC);
@@ -144,17 +220,25 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
     `TOOL_TIMEOUT_SECONDS` padrão (15 s);
   - restaurantes reais não têm gabarito: os evals continuam no sintético, e perguntas sobre os
     reais só têm os testes do pipeline como garantia;
-  - o Delivery Center é de 2021: perguntas sobre ele precisam de `--today` em maio de 2021.
+  - o Delivery Center é de 2021 e o Zomato vai até jan/2025: perguntas sobre eles precisam de
+    `--today` logo depois do fim de cada base;
+  - no Zomato, "qual canal mais cancelou" é trivial (um canal só), "em que hora a entrega
+    demora mais" não tem resposta (sem tempo de entrega) e "qual prato faturou mais" só tem
+    resposta em quantidade;
+  - o tempo de preparo (`KPT`) e a nota existem no Zomato, mas ainda não chegam às
+    ferramentas.
 - **Como sei que deu certo:**
-  - testes locais com Spark (`tests/lakehouse`, job `lakehouse` da CI): o seed e um recorte do
-    Delivery Center com os defeitos reais passam pelo upload, pelo pipeline e pelas consultas
+  - testes locais com Spark (`tests/lakehouse`, job `lakehouse` da CI): o seed e recortes do
+    Delivery Center e do Zomato, escritos à mão com os defeitos reais, passam pelo upload, pelo pipeline e pelas consultas
     exatas das ferramentas; o gold reproduz os padrões plantados (app -100% na terça; sábado à
     noite com entrega 40% acima do prometido) e o tratamento de cada defeito;
-  - com `DELIVERY_CENTER_DIR` apontando para o download, o mesmo pipeline roda sobre a base
+  - com `DELIVERY_CENTER_DIR` e `ZOMATO_FILE` apontando para os downloads, o mesmo pipeline
+    roda sobre cada base
     real inteira (fora da CI);
   - no eval ao vivo com o lakehouse ligado: os casos de queda de vendas acertam com menos
     passos que com só o Postgres. Ainda não medido.
-- **Próximos passos possíveis:** a fonte Zomato (itens, notas e comentários; os comentários
-  entram como texto não confiável, como as avaliações de hoje); casos de eval sobre os
-  restaurantes reais com gabarito tirado do gold; ingestão incremental com Auto Loader; CDC do
+- **Próximos passos possíveis:** casos de eval sobre os restaurantes reais com gabarito tirado
+  do gold; tempo de preparo e nota do Zomato numa ferramenta (a nota com o viés de seleção
+  explicado); comentários do Zomato como texto não confiável, pelo mesmo caminho das avaliações
+  de hoje; ingestão incremental com Auto Loader; CDC do
   Postgres.

@@ -66,20 +66,21 @@ promotions(id, restaurant_id, menu_item_id, discount_pct, start_date, end_date, 
 ```
 
 Lakehouse (Databricks, Unity Catalog `<catalog>.<schema>`), rebuilt from raw files per source
-(`brigada`: export of the tables above without reviews; `delivery_center`: the Kaggle download):
+(`brigada`: export of the tables above without reviews; `delivery_center` and `zomato`: the
+Kaggle downloads):
 
 ```
 bronze_<source>_<table>                  raw CSV as uploaded, all strings
 silver_<source>_{restaurants,orders,...} cleaned and mapped to the conformed contract
 silver_{restaurants,orders,order_items,menu_items}   union of the sources
-gold_restaurants(restaurant_id, source, source_id, name, segment, city, state, data_from,
-     data_until, completed_orders)
+gold_restaurants(restaurant_id, source, source_id, name, segment, city, state, currency,
+     timezone, data_from, data_until, completed_orders)
 gold_daily_channel_sales(restaurant_id, source, day, iso_weekday, channel, orders, revenue,
      canceled_orders, baseline_weeks, baseline_orders, baseline_revenue, revenue_change_pct)
 gold_item_daily_sales(restaurant_id, day, menu_item_id, item_name, category, active, qty,
      revenue, orders)
 gold_delivery_hourly(restaurant_id, source, day, iso_weekday, hour, delivered_orders,
-     delivery_minutes_sum, promised_minutes_sum, promised_count, late_orders,
+     timed_orders, delivery_minutes_sum, promised_minutes_sum, promised_count, late_orders,
      distance_km_sum, distance_count)
 ```
 

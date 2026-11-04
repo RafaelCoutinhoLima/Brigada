@@ -35,7 +35,7 @@ Frameworks hide the parts that matter in production: the tool-use loop, retries,
                └──────────────┘
 ```
 
-Optional analytical layer: a Databricks lakehouse (medallion pipeline, serverless) that cleans a real dataset next to the synthetic one; three extra read tools query its gold tables through a SQL warehouse ([Lakehouse](#lakehouse-databricks)).
+Optional analytical layer: a Databricks lakehouse (medallion pipeline, serverless) that cleans two real datasets next to the synthetic one; three extra read tools query its gold tables through a SQL warehouse ([Lakehouse](#lakehouse-databricks)).
 
 Cross-cutting: model router (ML classifier), guardrails, OpenTelemetry tracing, eval suite (harness and security tests run in CI; live model runs on demand).
 
@@ -53,7 +53,7 @@ Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | 6 | Evals & LLMOps | 63 cases with ground truth from the data generator, versioned prompts, regression gate against a baseline (`--fail-under-baseline`); LLM-as-judge planned |
 | 7 | Observability | Per-step traces, cost per question, prompt caching impact |
 | 8 | Prompt injection defense | Malicious data in RAG, automated attack tests |
-| 9 | Lakehouse (Databricks) | Real data (Delivery Center) and synthetic data through a medallion pipeline (Lakeflow Declarative Pipelines, Asset Bundle, data quality expectations) feeding three fixed-SQL MCP tools; off unless configured |
+| 9 | Lakehouse (Databricks) | Real data (Delivery Center, Brazil; Zomato, India) and synthetic data through a medallion pipeline (Lakeflow Declarative Pipelines, Asset Bundle, data quality expectations) feeding three fixed-SQL MCP tools; off unless configured |
 
 ## Results
 
@@ -102,20 +102,20 @@ The classifier finds no signal: out-of-fold ROC AUC 0.43 (range 0.31–0.51, 0.5
 
 ## Lakehouse (Databricks)
 
-The agents also work on a **real dataset**, cleaned in a Databricks lakehouse ([ADR 0009](docs/adr/0009-lakehouse-databricks.md)). No public, real, item-level dataset of Brazilian restaurants exists, so the closest real one was picked: [Delivery Center](https://www.kaggle.com/datasets/nosbielcs/brazilian-delivery-center), ~369k orders (Jan–Apr 2021) of a Brazilian platform connecting stores to marketplaces, anonymized by its authors. The synthetic data stays alongside: it has the eval ground truth.
+The agents also work on **real datasets**, cleaned in a Databricks lakehouse ([ADR 0009](docs/adr/0009-lakehouse-databricks.md)). No public, real, item-level dataset of Brazilian restaurants exists, so two complementary ones were picked: [Delivery Center](https://www.kaggle.com/datasets/nosbielcs/brazilian-delivery-center), ~369k orders (Jan–Apr 2021) of a Brazilian platform connecting stores to marketplaces, anonymized by its authors (no dishes), and a Zomato order history from Kaggle, ~21k orders (Sep 2024–Jan 2025) of 21 restaurant outlets in Delhi NCR, India, with the dishes of each order and ratings (no prices per dish, no delivery times). The synthetic data stays alongside: it has the eval ground truth.
 
 ```
 Postgres (synthetic) ─export─┐
-                             ├─► UC volume raw/<source>/ ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► agents
-Kaggle (Delivery Center) ────┘                             └─ Lakeflow Declarative Pipeline ─┘
+Kaggle (Delivery Center) ────┼─► UC volume raw/<source>/ ─► bronze ─► silver ─► gold ─SQL warehouse─► MCP ─► agents
+Kaggle (Zomato) ─────────────┘                             └─ Lakeflow Declarative Pipeline ─┘
 ```
 
 - **bronze**: each source's files as uploaded (the original is always re-processable).
-- **silver**: one module per source maps it to a single conformed contract (restaurants, orders with local time, status, channel, delivery time, distance; order lines when the source has them), with `expect_all_or_drop` data quality rules. Gold, the tools and the agents never see source-specific columns.
+- **silver**: one module per source maps it to a single conformed contract (restaurants with their currency and time zone, orders with local time, status, channel, delivery time, distance; order lines when the source has them), with `expect_all_or_drop` data quality rules. Gold, the tools and the agents never see source-specific columns.
 - **gold**: zero-filled daily aggregates: sales per channel next to the same weekday's 4-week baseline, sales per dish, delivery time / promise / lateness / distance per hour, and the restaurant registry with its coverage.
-- **tools**: `sales_vs_baseline`, `item_trends` (Sales) and `delivery_performance` (Operations) run fixed, parameterized SQL on gold through the same MCP server (tenant scope, audit, error mapping). Results carry `data_until` and a `note` when days are missing (missing, never zero) or when the dataset simply has no such data (Delivery Center has no order lines nor delivery promises).
+- **tools**: `sales_vs_baseline`, `item_trends` (Sales) and `delivery_performance` (Operations) run fixed, parameterized SQL on gold through the same MCP server (tenant scope, audit, error mapping). Results carry the restaurant's `currency` (BRL or INR, never converted), `data_until`, and a `note` when days are missing (missing, never zero) or when the dataset simply has no such data (Delivery Center: no order lines, no promises; Zomato: no dish prices, no delivery times). Missing data is NULL, never 0.
 
-What profiling the real files found, and what silver does about it:
+What profiling the real files found, and what silver does about it. Delivery Center:
 
 | Defect in the raw data | Treatment |
 |---|---|
@@ -126,9 +126,20 @@ What profiling the real files found, and what silver does about it:
 | Latin-1 files, names with stray spaces, 40 channel codes | Read with the right encoding, normalized, mapped to marketplace / own channel |
 | Retail and food stores mixed | Only FOOD stores become restaurants (384 of 951) |
 
-On the full dataset: 368,999 raw orders → 321,733 in silver. Real restaurants are registered in Postgres only as a registry row (`data_source = 'lakehouse'`, migration 0010): the Postgres tools refuse them and point to the lakehouse tools instead of answering "zero sales".
+Zomato:
 
-The transforms are plain PySpark functions (`lakehouse/src/brigada_lakehouse/`); the pipeline file only wires them to tables, so `tests/lakehouse` runs the same code on a local Spark, fed exactly like the volume: the synthetic export plus a Delivery Center extract carrying every defect above, through to the exact SQL the tools send. Gold reproduces the planted patterns (restaurant 1's app at -100% on the last Tuesday; Saturday-night deliveries ~40% over the promise). Deployed with a Databricks Asset Bundle on the Free Edition; without the `DATABRICKS_*` settings nothing changes. Step by step (Portuguese): [docs/lakehouse.md](docs/lakehouse.md).
+| What the raw file has | Treatment |
+|---|---|
+| Timestamps already in **India local time** (lunch at 13h, dinner at 20h, nothing 5–10h) | Read as `Asia/Kolkata` wall clock, no conversion; after-midnight orders stay on their calendar day |
+| Headers with spaces and parentheses, which Delta rejects | Bronze stores snake_case column names; values stay as they came |
+| Dishes as text (`"1 x Animal Fries, 2 x Salted Fries"`), repeats and case variants | Parsed into order lines, summed per normalized name; `menu_item_id` is a stable hash of outlet + name (190 of 244 dishes are sold by several outlets) |
+| No price per dish, no delivery time | NULL, never 0: dish revenue and delivery minutes come back null with a `note`; quantities and distances are exact |
+| Distance in km bands and `<1km`; one delivery type; 6 orders never closed | `<1km` = 0.5 km; one channel; unclosed statuses dropped and counted |
+| Reviews, delivery instructions, customer ids | Untrusted or personal: kept in bronze only, never in silver or any tool. Dish and outlet names that reach the model must look like names (plain characters, ≤ 80) |
+
+On the full datasets: Delivery Center 368,999 raw orders → 321,733 in silver; Zomato 21,321 → 21,315, 21 outlets, 38,137 order lines. Restaurant ids never collide and fit an integer: `1,000,000 + store_id` and `100,000,000 + Zomato id`. Real restaurants are registered in Postgres only as a registry row (`data_source = 'lakehouse'`, migration 0010): the Postgres tools refuse them and point to the lakehouse tools instead of answering "zero sales".
+
+The transforms are plain PySpark functions (`lakehouse/src/brigada_lakehouse/`); the pipeline file only wires them to tables, so `tests/lakehouse` runs the same code on a local Spark, fed exactly like the volume: the synthetic export plus hand-written Delivery Center and Zomato extracts carrying every defect above, through to the exact SQL the tools send. Gold reproduces the planted patterns (restaurant 1's app at -100% on the last Tuesday; Saturday-night deliveries ~40% over the promise). Deployed with a Databricks Asset Bundle on the Free Edition; without the `DATABRICKS_*` settings nothing changes. Step by step (Portuguese): [docs/lakehouse.md](docs/lakehouse.md).
 
 ## Stack
 
@@ -167,7 +178,7 @@ curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
 
 ## Data
 
-The core restaurant data is **synthetic**, generated by `scripts/seed_data.py`. The lakehouse also reads the public, anonymized [Delivery Center](https://www.kaggle.com/datasets/nosbielcs/brazilian-delivery-center) dataset from Kaggle; it is downloaded by whoever runs it and never committed here.
+The core restaurant data is **synthetic**, generated by `scripts/seed_data.py`. The lakehouse also reads two public Kaggle datasets, the anonymized [Delivery Center](https://www.kaggle.com/datasets/nosbielcs/brazilian-delivery-center) one and a Zomato restaurant order history (customers hashed); they are downloaded by whoever runs it and never committed here.
 
 ## Author
 
