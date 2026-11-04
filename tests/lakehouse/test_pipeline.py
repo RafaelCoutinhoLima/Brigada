@@ -28,7 +28,7 @@ pytestmark = pytest.mark.spark
 
 DC = delivery_center.RESTAURANT_ID_OFFSET
 Z = zomato.RESTAURANT_ID_OFFSET
-Z1, Z2 = Z + 20320607, Z + 21309083
+Z1, Z2, Z3 = Z + 20320607, Z + 21309083, Z + 20554001
 
 
 def _rows(df: Any, key: str) -> dict[Any, Any]:
@@ -215,9 +215,10 @@ def test_items_only_from_sources_that_have_them(tables: dict[str, Any]) -> None:
 
 def test_zomato_restaurants_are_outlets_with_their_subzone(tables: dict[str, Any]) -> None:
     rows = _rows(tables["silver_zomato_restaurants"], "restaurant_id")
-    assert set(rows) == {Z1, Z2}  # id 100000000 would overflow the offset range: dropped
+    assert set(rows) == {Z1, Z2, Z3}  # id 100000000 would overflow the offset range: dropped
     assert rows[Z1]["name"] == "Swaad (Sector 4)" and rows[Z1]["source_id"] == "20320607"
     assert rows[Z2]["name"] == "Swaad (Sector 135)"  # 2 orders there, 1 in Shahdara
+    assert rows[Z3]["name"] == "Zomato 20554001"  # brand with markup: not shown
     assert rows[Z1]["city"] == "Delhi NCR" and rows[Z1]["state"] is None
     assert (rows[Z1]["currency"], rows[Z1]["timezone"]) == ("INR", "Asia/Kolkata")
     assert Z2 < 2**31 and Z1 > DC + 1_000_000  # fits an integer, never a Delivery Center id
@@ -227,7 +228,7 @@ def test_zomato_orders_are_cleaned(tables: dict[str, Any]) -> None:
     rows = _rows(tables["silver_zomato_orders"], "order_id")
     # z5 picked up, z6 return cancelled, z7 impossible time, z8 id out of range,
     # z9 unknown delivery type, z13 zero total.
-    assert set(rows) == {"z1", "z2", "z3", "z4", "z10", "z11", "z12"}
+    assert set(rows) == {"z1", "z2", "z3", "z4", "z10", "z11", "z12", "z14"}
     z1 = rows["z1"]
     assert z1["created_at_local"] == datetime(2024, 9, 10, 23, 38)  # India local, no conversion
     assert (z1["local_day"], z1["local_hour"]) == (date(2024, 9, 10), 23)
@@ -276,7 +277,7 @@ def test_zomato_items_are_parsed_per_outlet(tables: dict[str, Any]) -> None:
     burger = by_outlet[Z1]["OG Cheese Burger"]
     assert got[("z2", burger)]["qty"] == 2  # "Og" + "OG" in one order: one line, qty 2
     assert got[("z1", by_outlet[Z1]["Salted Fries"])]["qty"] == 2
-    assert {o for o, _ in got} == {"z1", "z2", "z3", "z4", "z10", "z11", "z12"}
+    assert {o for o, _ in got} == {"z1", "z2", "z3", "z4", "z10", "z11", "z12", "z14"}
     assert [k for k in got if k[0] == "z12"] == [("z12", by_outlet[Z2]["Animal Fries"])]
     assert all(r["unit_price"] is None for r in got.values())  # no prices in the source
 

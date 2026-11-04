@@ -112,7 +112,7 @@ def restaurants(bronze: DataFrame) -> DataFrame:
     for column in ("brand", "subzone", "city"):
         ids = ids.join(_most_frequent(df, "restaurant_id", column), "restaurant_id", "left")
     name = F.when(
-        F.col("subzone").isNotNull(), F.concat_ws("", "brand", F.lit(" ("), "subzone", F.lit(")"))
+        F.col("subzone").isNotNull(), F.concat("brand", F.lit(" ("), "subzone", F.lit(")"))
     ).otherwise(F.col("brand"))
     out = ids.select(
         "restaurant_id",
