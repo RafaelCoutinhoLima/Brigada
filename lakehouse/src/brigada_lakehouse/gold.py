@@ -4,8 +4,8 @@ These are what the MCP tools read through the SQL warehouse (src/brigada/lakehou
 
 - ``gold_restaurants``: every restaurant, its source, currency and time zone, and the days it
   has data for.
-- ``gold_daily_channel_sales``: revenue and orders per day and channel next to the same
-  weekday's mean over the previous ``BASELINE_WEEKS`` weeks (sales_vs_baseline).
+- ``gold_daily_channel_sales``: revenue and orders per day and channel next to the mean of the
+  previous ``BASELINE_WEEKS`` same weekdays that were not holidays (sales_vs_baseline).
 - ``gold_item_daily_sales``: quantity and revenue per day and dish (item_trends). Only sources
   that record order lines appear.
 - ``gold_delivery_hourly``: delivered orders, delivery time, promise and distance per day and
@@ -14,13 +14,18 @@ These are what the MCP tools read through the SQL warehouse (src/brigada/lakehou
 Revenue counts completed orders only; canceled orders are counted apart.
 """
 
+from collections.abc import Sequence
+
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 
 from brigada_lakehouse.common import iso_weekday
+from brigada_lakehouse.holidays import HOLIDAYS, Holiday
 from brigada_lakehouse.sources import brigada, delivery_center, zomato
 
 BASELINE_WEEKS = 4
+# How far back the baseline may reach to find BASELINE_WEEKS normal (non-holiday) days.
+BASELINE_LOOKBACK_WEEKS = 8
 SOURCE_CHANNELS: dict[str, tuple[str, ...]] = {
     brigada.SOURCE: brigada.CHANNELS,
     delivery_center.SOURCE: delivery_center.CHANNELS,
@@ -52,6 +57,7 @@ def gold_restaurants(restaurants: DataFrame, orders: DataFrame) -> DataFrame:
         "segment",
         "city",
         "state",
+        "country",
         "currency",
         "timezone",
         "data_from",
@@ -60,15 +66,50 @@ def gold_restaurants(restaurants: DataFrame, orders: DataFrame) -> DataFrame:
     )
 
 
-def gold_daily_channel_sales(orders: DataFrame) -> DataFrame:
-    """Revenue and orders per restaurant, local day and channel, zero-filled over the channels
-    of the restaurant's source, next to the mean of the same weekday in the previous
-    ``BASELINE_WEEKS`` weeks.
+def restaurant_holidays(
+    restaurants: DataFrame, holidays: Sequence[Holiday] = HOLIDAYS
+) -> DataFrame:
+    """(restaurant_id, day, holiday_name) for every holiday that applies to the restaurant:
+    same country, and the holiday's state and city (when set) equal to the restaurant's.
+    Several holidays on one day are joined with " / "."""
+    spark = restaurants.sparkSession
+    cal = spark.createDataFrame(
+        [(h.country, h.state, h.city, h.day, h.name) for h in holidays],
+        "country string, h_state string, h_city string, day date, holiday_name string",
+    )
+    r = restaurants.select(
+        "restaurant_id",
+        "country",
+        F.upper("state").alias("r_state"),
+        F.lower("city").alias("r_city"),
+    )
+    applies = (
+        (F.col("h_state").isNull() | (F.upper("h_state") == F.col("r_state")))
+        & (F.col("h_city").isNull() | (F.lower("h_city") == F.col("r_city")))
+        # a city holiday needs the state too (the same city name exists in other states)
+        & (F.col("h_city").isNull() | F.col("h_state").isNull() | F.col("r_state").isNotNull())
+    )
+    return (
+        r.join(cal, "country")
+        .where(applies)
+        .groupBy("restaurant_id", "day")
+        .agg(F.concat_ws(" / ", F.sort_array(F.collect_set("holiday_name"))).alias("holiday_name"))
+    )
 
-    Because every day of the calendar is present, the 4 rows before a day in the
-    (restaurant, channel, weekday) window are exactly the 4 previous same weekdays.
-    ``baseline_weeks`` says how many of them exist (fewer at the start of the history); with 0
-    the baseline and the change are null, never a made-up 0.
+
+def gold_daily_channel_sales(
+    orders: DataFrame, restaurants: DataFrame, holidays: Sequence[Holiday] = HOLIDAYS
+) -> DataFrame:
+    """Revenue and orders per restaurant, local day and channel, zero-filled over the channels
+    of the restaurant's source, next to the mean of the previous ``BASELINE_WEEKS`` same
+    weekdays that were **not holidays** for that restaurant.
+
+    The baseline looks back at most ``BASELINE_LOOKBACK_WEEKS`` weeks, so a holiday in the way
+    is skipped and an older normal day takes its place. A holiday row gets a baseline too (made
+    of normal days) and carries ``holiday_name``, so the tool can say "it was a holiday" instead
+    of reporting an unexplained drop. ``baseline_weeks`` says how many normal days were found
+    (fewer at the start of the history); with 0 the baseline and the change are null, never a
+    made-up 0.
     """
     spark = orders.sparkSession
     channels = spark.createDataFrame(
@@ -82,27 +123,40 @@ def gold_daily_channel_sales(orders: DataFrame) -> DataFrame:
     )
     df = (
         grid.join(daily, ["restaurant_id", "day", "channel"], "left")
+        .join(restaurant_holidays(restaurants, holidays), ["restaurant_id", "day"], "left")
         .withColumn("orders", F.coalesce("orders", F.lit(0)).cast("int"))
         .withColumn("revenue", F.coalesce("revenue", F.lit(0)).cast("decimal(14,2)"))
         .withColumn("canceled_orders", F.coalesce("canceled_orders", F.lit(0)).cast("int"))
         .withColumn("iso_weekday", iso_weekday(F.col("day")))
+        .withColumn("is_holiday", F.col("holiday_name").isNotNull())
     )
-    history = (
-        Window.partitionBy("restaurant_id", "channel", "iso_weekday")
-        .orderBy("day")
-        .rowsBetween(-BASELINE_WEEKS, -1)
+
+    # Every (day, earlier normal same weekday within the lookback), newest first; keep 4.
+    normal = df.where(~F.col("is_holiday")).select(
+        "restaurant_id",
+        "channel",
+        F.col("day").alias("past_day"),
+        F.col("revenue").alias("past_revenue"),
+        F.col("orders").alias("past_orders"),
     )
-    has_history = F.col("baseline_weeks") > 0
-    df = (
-        df.withColumn("baseline_weeks", F.count("revenue").over(history).cast("int"))
-        .withColumn(
-            "baseline_revenue",
-            F.when(has_history, F.round(F.avg("revenue").over(history), 2)).cast("decimal(14,2)"),
+    target = df.select("restaurant_id", "channel", "day")
+    lag_days = F.datediff(F.col("day"), F.col("past_day"))
+    pairs = target.join(normal, ["restaurant_id", "channel"]).where(
+        (lag_days > 0) & (lag_days % 7 == 0) & (lag_days <= 7 * BASELINE_LOOKBACK_WEEKS)
+    )
+    newest = Window.partitionBy("restaurant_id", "channel", "day").orderBy(F.col("past_day").desc())
+    baseline = (
+        pairs.withColumn("_rank", F.row_number().over(newest))
+        .where(F.col("_rank") <= BASELINE_WEEKS)
+        .groupBy("restaurant_id", "channel", "day")
+        .agg(
+            F.count("*").cast("int").alias("baseline_weeks"),
+            F.round(F.avg("past_revenue"), 2).cast("decimal(14,2)").alias("baseline_revenue"),
+            F.round(F.avg("past_orders"), 2).cast("double").alias("baseline_orders"),
         )
-        .withColumn(
-            "baseline_orders",
-            F.when(has_history, F.round(F.avg("orders").over(history), 2)).cast("double"),
-        )
+    )
+    df = df.join(baseline, ["restaurant_id", "channel", "day"], "left").withColumn(
+        "baseline_weeks", F.coalesce("baseline_weeks", F.lit(0)).cast("int")
     )
     change = F.when(
         F.col("baseline_revenue") > 0,
@@ -119,6 +173,8 @@ def gold_daily_channel_sales(orders: DataFrame) -> DataFrame:
         "orders",
         "revenue",
         "canceled_orders",
+        "is_holiday",
+        "holiday_name",
         "baseline_weeks",
         "baseline_orders",
         "baseline_revenue",

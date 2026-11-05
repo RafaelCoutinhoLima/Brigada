@@ -51,10 +51,17 @@ class FakeWarehouse:
         return self.coverage if "`gold_restaurants`" in sql else self.rows
 
 
-def _channel(channel: str, revenue: float, baseline: float | None, weeks: int = 4) -> dict:
+def _channel(
+    channel: str,
+    revenue: float,
+    baseline: float | None,
+    weeks: int = 4,
+    holiday: str | None = None,
+) -> dict:
     return {
         "day": DAY,
         "channel": channel,
+        "holiday_name": holiday,
         "orders": int(revenue // 50),
         "revenue": revenue,
         "canceled_orders": 1 if channel == "app" else 0,
@@ -93,6 +100,18 @@ def test_sales_vs_baseline_totals_the_channels_and_binds_every_value() -> None:
     assert "`workspace`.`brigada`.`gold_daily_channel_sales`" in main_sql
     for sql, params in fetch.calls:
         assert "2026-10-27" not in sql and params["restaurant_id"] == 1  # bound, not inlined
+
+
+def test_a_holiday_is_named_on_its_day_and_in_the_note() -> None:
+    fetch = FakeWarehouse(
+        [_channel("app", 100.0, 1000.0, holiday="Sexta-feira da Paixão")], date(2026, 7, 30), DAY
+    )
+    inp = SalesVsBaselineInput(restaurant_id=1, start_date=DAY, end_date=DAY)
+    result = queries.sales_vs_baseline(fetch, inp, TABLES)
+    assert result.days[0].holiday == "Sexta-feira da Paixão"
+    assert result.note is not None and "2026-10-27 (Sexta-feira da Paixão)" in result.note
+    plain = queries.sales_vs_baseline(FakeWarehouse([_channel("app", 1, 1)], DAY, DAY), inp, TABLES)
+    assert plain.days[0].holiday is None and plain.note is None
 
 
 def test_no_history_means_no_baseline_not_zero() -> None:

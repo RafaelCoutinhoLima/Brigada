@@ -89,12 +89,17 @@ class ChannelVsBaseline(_Output):
 class DayVsBaseline(_Output):
     day: date
     weekday: str
+    holiday: str | None = Field(
+        default=None,
+        description="Holiday name when this day was a holiday for the restaurant; it is "
+        "compared with normal days, so a big change is expected and is not a problem.",
+    )
     orders: int
     revenue: float
     canceled_orders: int
     baseline_weeks: int = Field(
-        description="How many previous same weekdays (up to 4) the baseline averages; 0 = no "
-        "history yet, so no baseline."
+        description="How many previous same weekdays (up to 4, holidays skipped, at most 8 "
+        "weeks back) the baseline averages; 0 = no history yet, so no baseline."
     )
     baseline_revenue: float | None
     revenue_change_pct: float | None

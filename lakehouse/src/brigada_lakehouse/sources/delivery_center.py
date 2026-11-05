@@ -39,6 +39,7 @@ from brigada_lakehouse.common import (
 )
 
 SOURCE = "delivery_center"
+COUNTRY = "BR"
 TIMEZONE = "America/Sao_Paulo"
 CURRENCY = "BRL"
 # Brigada restaurant id = offset + store_id, so the ids never collide with other sources.
@@ -91,6 +92,7 @@ def restaurants(stores: DataFrame, hubs: DataFrame) -> DataFrame:
             F.lit("food").alias("segment"),
             "city",
             "state",
+            F.lit(COUNTRY).alias("country"),
             F.lit(CURRENCY).alias("currency"),
             F.lit(TIMEZONE).alias("timezone"),
         )

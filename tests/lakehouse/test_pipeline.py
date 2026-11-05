@@ -2,7 +2,7 @@
 and a Delivery Center extract with the real files' defects."""
 
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,7 @@ pytest.importorskip("pyspark")
 
 from brigada_lakehouse import common, gold  # noqa: E402
 from brigada_lakehouse.build import SOURCES  # noqa: E402
+from brigada_lakehouse.holidays import HOLIDAYS, Holiday  # noqa: E402
 from brigada_lakehouse.sources import brigada, delivery_center, zomato  # noqa: E402
 from pyspark.sql import functions as F  # noqa: E402
 
@@ -326,7 +327,7 @@ def test_baseline_uses_previous_same_weekdays_and_never_invents_zero(spark: Any)
     deliveries = spark.createDataFrame(
         [], "order_id string, actual_minutes string, promised_minutes string"
     )
-    g = gold.gold_daily_channel_sales(brigada.orders(bronze, deliveries))
+    g = gold.gold_daily_channel_sales(brigada.orders(bronze, deliveries), _restaurant(spark), [])
 
     days = (date(2026, 10, 27) - date(2026, 9, 29)).days + 1
     assert g.count() == days * len(brigada.CHANNELS)  # every day x channel
@@ -337,6 +338,100 @@ def test_baseline_uses_previous_same_weekdays_and_never_invents_zero(spark: Any)
     assert last["balcao"]["revenue_change_pct"] is None  # no division by a zero baseline
     first = g.where("day = '2026-09-29' AND channel = 'app'").first()
     assert first["baseline_weeks"] == 0 and first["baseline_revenue"] is None
+
+
+def _restaurant(spark: Any, state: str | None = "SP", city: str = "São Paulo", rid: int = 1) -> Any:
+    return spark.createDataFrame(
+        [(rid, "BR", state, city)],
+        "restaurant_id bigint, country string, state string, city string",
+    )
+
+
+def _tuesday_sales(spark: Any, revenue_by_day: dict[date, int]) -> Any:
+    """Synthetic-source orders, one app order per given Tuesday (15:00 UTC = noon local)."""
+    rows = [
+        (str(i), "1", f"{d.isoformat()} 15:00:00", f"{v}.00", "app")
+        for i, (d, v) in enumerate(sorted(revenue_by_day.items()))
+    ]
+    bronze = spark.createDataFrame(
+        rows, ["id", "restaurant_id", "created_at_utc", "total", "channel"]
+    )
+    deliveries = spark.createDataFrame(
+        [], "order_id string, actual_minutes string, promised_minutes string"
+    )
+    return brigada.orders(bronze, deliveries)
+
+
+def test_holiday_in_the_window_is_skipped_for_an_older_normal_day(spark: Any) -> None:
+    # Six Tuesdays; 10/06 is a (made-up) holiday with a crash. The 4 normal Tuesdays before
+    # 10/27 are 10/20, 10/13, 9/29 and 9/22: 10/06 is skipped, 9/22 takes its place.
+    tuesdays = {
+        date(2026, 9, 22): 10,
+        date(2026, 9, 29): 20,
+        date(2026, 10, 6): 1,
+        date(2026, 10, 13): 30,
+        date(2026, 10, 20): 40,
+        date(2026, 10, 27): 25,
+    }
+    holiday = Holiday("BR", None, None, date(2026, 10, 6), "Feriado de teste", "teste")
+    g = gold.gold_daily_channel_sales(
+        _tuesday_sales(spark, tuesdays), _restaurant(spark), [holiday]
+    )
+    last = g.where("day = '2026-10-27' AND channel = 'app'").first()
+    assert last["baseline_weeks"] == 4 and last["is_holiday"] is False
+    assert last["baseline_revenue"] == Decimal("25.00")  # (40 + 30 + 20 + 10) / 4
+    assert last["revenue_change_pct"] == 0.0  # without the skip: (40+30+1+20)/4 = 22.75
+    hol = g.where("day = '2026-10-06' AND channel = 'app'").first()
+    assert hol["is_holiday"] is True and hol["holiday_name"] == "Feriado de teste"
+    assert hol["baseline_weeks"] == 2  # 9/29, 9/22: normal days only
+    assert hol["revenue_change_pct"] == -93.3  # flagged; the tool explains it
+
+
+def test_baseline_never_reaches_past_the_lookback(spark: Any) -> None:
+    # Every Tuesday of the 8 weeks before 10/27 is a holiday; the only normal Tuesday with
+    # sales is 9 weeks back, out of reach: no baseline at all, never an invented one.
+    end = date(2026, 10, 27)
+    weeks = gold.BASELINE_LOOKBACK_WEEKS
+    far = end - timedelta(weeks=weeks + 1)
+    holidays = [
+        Holiday("BR", None, None, end - timedelta(weeks=k), f"h{k}", "teste")
+        for k in range(1, weeks + 1)
+    ]
+    g = gold.gold_daily_channel_sales(
+        _tuesday_sales(spark, {far: 100, end: 50}), _restaurant(spark), holidays
+    )
+    last = g.where("day = '2026-10-27' AND channel = 'app'").first()
+    assert last["baseline_weeks"] == 0
+    assert last["baseline_revenue"] is None and last["revenue_change_pct"] is None
+
+
+def test_holidays_follow_the_restaurants_state_and_city(spark: Any) -> None:
+    restaurants = spark.createDataFrame(
+        [
+            (1, "BR", "RJ", "Rio De Janeiro"),  # how Delivery Center writes it
+            (2, "BR", "SP", "São Paulo"),
+            (3, "BR", None, "Rio de Janeiro"),  # synthetic: no state, national days only
+            (4, "IN", None, "Delhi NCR"),
+        ],
+        "restaurant_id bigint, country string, state string, city string",
+    )
+    got: dict[int, dict[date, str]] = {}
+    for r in gold.restaurant_holidays(restaurants).collect():
+        got.setdefault(r["restaurant_id"], {})[r["day"]] = r["holiday_name"]
+    assert got[1][date(2021, 1, 20)] == "São Sebastião"  # Rio only
+    assert date(2021, 1, 20) not in got[2] and got[2][date(2021, 1, 25)].startswith("Aniv")
+    assert date(2021, 4, 23) not in got[1]  # São Jorge 2021 moved to 30/03 by state law
+    assert got[1][date(2021, 3, 30)] == "São Jorge (antecipado)"
+    assert date(2021, 4, 21) not in got[1] and date(2021, 4, 21) in got[2]  # Tiradentes moved
+    assert set(got[3]) == {h.day for h in HOLIDAYS if h.country == "BR" and h.state is None}
+    assert got[1][date(2021, 4, 2)] == got[2][date(2021, 4, 2)] == "Sexta-feira da Paixão"
+    assert got[4][date(2024, 10, 31)] == "Diwali" and date(2021, 4, 2) not in got[4]
+
+
+def test_every_holiday_has_a_source_and_no_duplicates() -> None:
+    assert all(h.source and h.name for h in HOLIDAYS)
+    keys = [(h.country, h.state, h.city, h.day) for h in HOLIDAYS]
+    assert len(keys) == len(set(keys))
 
 
 def test_gold_reproduces_the_planted_outage(tables: dict[str, Any]) -> None:

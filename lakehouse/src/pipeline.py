@@ -159,11 +159,11 @@ def gold_restaurants() -> DataFrame:
 
 @dlt.table(
     comment="Revenue, orders and cancellations per restaurant, local day and channel "
-    f"(zero-filled), with the same weekday's mean over the previous {gold.BASELINE_WEEKS} "
-    "weeks. Read by sales_vs_baseline."
+    f"(zero-filled), with the mean of the previous {gold.BASELINE_WEEKS} same weekdays that "
+    "were not holidays (holidays flagged). Read by sales_vs_baseline."
 )
 def gold_daily_channel_sales() -> DataFrame:
-    return gold.gold_daily_channel_sales(dlt.read("silver_orders"))
+    return gold.gold_daily_channel_sales(dlt.read("silver_orders"), dlt.read("silver_restaurants"))
 
 
 if WITH_ITEMS:

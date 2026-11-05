@@ -60,6 +60,7 @@ from brigada_lakehouse.common import (
 )
 
 SOURCE = "zomato"
+COUNTRY = "IN"
 TIMEZONE = "Asia/Kolkata"
 CURRENCY = "INR"
 # Brigada restaurant id = offset + Zomato id: below 2^31 and above Delivery Center's range.
@@ -122,6 +123,7 @@ def restaurants(bronze: DataFrame) -> DataFrame:
         F.lit("food").alias("segment"),
         "city",
         F.lit(None).cast("string").alias("state"),
+        F.lit(COUNTRY).alias("country"),
         F.lit(CURRENCY).alias("currency"),
         F.lit(TIMEZONE).alias("timezone"),
     )

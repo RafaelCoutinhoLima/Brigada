@@ -131,7 +131,7 @@ def sales_vs_baseline(
 ) -> SalesVsBaselineResult:
     table = tables.daily_channel_sales
     rows = fetch(
-        "SELECT day, channel, orders, revenue, canceled_orders, baseline_weeks, "
+        "SELECT day, channel, orders, revenue, canceled_orders, holiday_name, baseline_weeks, "
         f"baseline_orders, baseline_revenue FROM {table} "
         "WHERE restaurant_id = :restaurant_id AND day BETWEEN :start_date AND :end_date "
         "ORDER BY day, channel",
@@ -174,6 +174,7 @@ def sales_vs_baseline(
             DayVsBaseline(
                 day=day,
                 weekday=WEEKDAY_NAMES[day.isoweekday()],
+                holiday=by_day[day][0]["holiday_name"],
                 orders=sum(c.orders for c in channels),
                 revenue=revenue,
                 canceled_orders=sum(c.canceled_orders for c in channels),
@@ -184,6 +185,15 @@ def sales_vs_baseline(
             )
         )
 
+    note = _missing_note(cov, inp.end_date, "Use sales_by_period for them if available.")
+    holidays = [f"{d.day.isoformat()} ({d.holiday})" for d in days if d.holiday]
+    if holidays:
+        flagged = (
+            f"Holidays in this range: {', '.join(holidays)}. Their change compares a holiday "
+            "with normal days: say it was a holiday instead of calling it a drop or a spike. "
+            "Holidays are never part of any baseline."
+        )
+        note = flagged if note is None else f"{note} {flagged}"
     return SalesVsBaselineResult(
         restaurant_id=inp.restaurant_id,
         start_date=inp.start_date,
@@ -193,7 +203,7 @@ def sales_vs_baseline(
         currency=cov.currency,
         data_until=cov.data_until,
         days=days,
-        note=_missing_note(cov, inp.end_date, "Use sales_by_period for them if available."),
+        note=note,
     )
 
 

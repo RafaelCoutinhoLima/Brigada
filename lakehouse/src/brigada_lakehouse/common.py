@@ -24,6 +24,7 @@ RESTAURANT_COLUMNS = (
     "segment",
     "city",
     "state",
+    "country",  # ISO 3166-1 alpha-2 (BR, IN): picks the holiday calendar
     "currency",  # ISO 4217 of every amount of the restaurant (BRL, INR)
     "timezone",  # IANA zone of created_at_local
 )

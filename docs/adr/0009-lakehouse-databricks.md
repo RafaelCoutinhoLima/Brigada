@@ -195,6 +195,30 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   ela o servidor e o especialista de Vendas ficam exatamente como antes.
 - **Frescor explícito:** toda resposta traz `data_until`, e `note` avisa quando o dia pedido
   não está no lakehouse ("faltando, não zero"), apontando para `sales_by_period`.
+- **Feriados fora da média de referência** (`brigada_lakehouse/holidays.py`). A média "mesmo
+  dia da semana nas 4 semanas anteriores" engolia feriados: no PAPA SUCIS (Rio), a Sexta-feira
+  da Paixão de 02/04/2021 entrava na média de 30/04 e escondia uma queda de 14,5% (aparecia
+  como -2,3%). Agora a média usa os 4 últimos mesmos dias da semana que **não** foram feriado
+  para aquele restaurante, buscando até 8 semanas para trás (com menos dias normais,
+  `baseline_weeks` diz quantos; com nenhum, a média é NULL). O próprio feriado ganha média de
+  dias normais e vem marcado (`is_holiday`, `holiday_name`); `sales_vs_baseline` devolve
+  `holiday` no dia e explica no `note`, e o prompt de Vendas manda dizer "foi feriado" antes de
+  falar em queda.
+  - O calendário cobre só os períodos dos dados, só feriados legais, cada um com a fonte:
+    nacionais (Lei 662/1949, Lei 9.093/1995), Rio em 2021 (Lei estadual 9.224/2021, que criou
+    feriados de 26/03 a 01/04 e antecipou Tiradentes para 29/03 e São Jorge para 30/03), São
+    Paulo capital em 2021 (Decreto municipal 60.131/2021, cinco feriados de 26/03 a 01/04),
+    aniversário de SP, São Sebastião no Rio, Navegantes em Porto Alegre, e a lista oficial do
+    governo de Delhi (notificações F.53/538, F.53/711 e F.53/689). Ponto facultativo
+    (Carnaval) fica de fora: o comércio abre, e em 2021 muitas cidades o cancelaram.
+  - Escopo por país, estado e cidade, com `country` novo no contrato de restaurantes. Feriado
+    municipal exige estado e cidade iguais; o sintético, sem estado, só recebe os nacionais.
+    Delhi NCR cobre três estados e o Zomato não diz qual: a lista de Delhi vale para a região
+    toda, uma aproximação.
+  - Queda nos dados nunca é fonte de feriado. Em 2021 São Jorge (23/04) foi antecipado no RJ,
+    então 23/04 entra na média como dia normal, apesar de as vendas terem caído 39% nesse dia.
+    Alternativa descartada: marcar dias atípicos pelo próprio dado (detecção de anomalia), que
+    esconderia justamente as quedas que o dono quer ver.
 - **Dado que a fonte não tem é NULL e vem explicado:** sem itens, `item_trends` diz que a base
   não tem linhas de pedido; sem preço, devolve receita nula, ordena por quantidade e diz por
   quê; sem tempo de entrega, `delivery_performance` devolve `mean_delivery_minutes` nulo e

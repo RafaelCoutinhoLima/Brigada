@@ -87,7 +87,9 @@ def build(spark: SparkSession, raw_path: str, sources: list[str]) -> dict[str, D
         t["silver_menu_items"] = union("menu_items", with_items)
 
     t["gold_restaurants"] = gold.gold_restaurants(t["silver_restaurants"], t["silver_orders"])
-    t["gold_daily_channel_sales"] = gold.gold_daily_channel_sales(t["silver_orders"])
+    t["gold_daily_channel_sales"] = gold.gold_daily_channel_sales(
+        t["silver_orders"], t["silver_restaurants"]
+    )
     if with_items:
         t["gold_item_daily_sales"] = gold.gold_item_daily_sales(
             t["silver_orders"], t["silver_order_items"], t["silver_menu_items"]

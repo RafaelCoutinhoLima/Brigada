@@ -21,6 +21,7 @@ from brigada_lakehouse.common import (
 )
 
 SOURCE = "brigada"
+COUNTRY = "BR"
 TIMEZONE = "America/Sao_Paulo"
 CURRENCY = "BRL"
 CHANNELS = ("app", "telefone", "balcao")
@@ -36,6 +37,7 @@ def restaurants(bronze: DataFrame) -> DataFrame:
         F.trim("cuisine").alias("segment"),
         F.trim("city").alias("city"),
         F.lit(None).cast("string").alias("state"),
+        F.lit(COUNTRY).alias("country"),
         F.lit(CURRENCY).alias("currency"),
         F.lit(TIMEZONE).alias("timezone"),
         *_meta(bronze),
