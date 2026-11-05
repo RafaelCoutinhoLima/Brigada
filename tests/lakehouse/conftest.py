@@ -12,6 +12,12 @@ import pytest
 
 from scripts.export_lakehouse import main as export_main
 
+if os.environ.get("REQUIRE_SPARK"):
+    # In the lakehouse CI job every test here must run: an import error is a failure there,
+    # not the silent skip it is on a machine without the spark group.
+    import pandas  # noqa: F401
+    import pyspark  # noqa: F401
+
 END = date(2026, 10, 27)  # a Tuesday: the planted outage day
 
 # A small Delivery Center extract, written in the raw files' own format and with the defects

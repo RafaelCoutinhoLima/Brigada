@@ -25,8 +25,10 @@ lakehouse = ["databricks-sql-connector>=4.0", "databricks-sdk>=0.40"]
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=0.24", "ruff>=0.6", "faker>=28"]
-# Local Spark to test the pipeline transforms (tests/lakehouse); needs Java 17+.
-spark = ["pyspark>=4.0"]
+# Local Spark to test the pipeline transforms (tests/lakehouse); needs Java 17+. pandas is what
+# toPandas() and the eval ground truth use: below 3, which pyspark does not fully support yet,
+# and with pyarrow so the conversion takes the Arrow path.
+spark = ["pyspark>=4.0", "pandas>=2.2,<3", "pyarrow>=18"]
 
 [build-system]
 requires = ["hatchling"]
