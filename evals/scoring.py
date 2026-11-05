@@ -159,7 +159,9 @@ NO_DATA_MARKERS: tuple[str, ...] = (
 
 
 def says_no_data(text: str) -> bool:
-    return contains_any(text, NO_DATA_MARKERS)
+    """Says the data is missing, and does not also give a zero for it: "vendeu R$ 0,00; não há
+    registro de pedidos" is the made-up zero these cases exist to catch."""
+    return contains_any(text, NO_DATA_MARKERS) and 0.0 not in extract_numbers(text)
 
 
 def is_refusal(text: str) -> bool:

@@ -99,8 +99,8 @@ class NoToolCalledExpected(_Strict):
 
 class NoDataExpected(_Strict):
     """Correct if the answer says the data does not exist for this restaurant (see
-    ``evals.scoring.NO_DATA_MARKERS``), instead of a made-up number or a zero. Not a refusal:
-    the question is in scope, the dataset just does not record it."""
+    ``evals.scoring.NO_DATA_MARKERS``) and gives no zero for it. Not a refusal: the question is
+    in scope, the dataset just does not record it."""
 
     type: Literal["no_data"] = "no_data"
 

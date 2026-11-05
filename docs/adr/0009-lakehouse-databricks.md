@@ -219,6 +219,11 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
     então 23/04 entra na média como dia normal, apesar de as vendas terem caído 39% nesse dia.
     Alternativa descartada: marcar dias atípicos pelo próprio dado (detecção de anomalia), que
     esconderia justamente as quedas que o dono quer ver.
+  - Feriado nem sempre é queda: em 21/04/2021 (Tiradentes, feriado em SP) o IUMPICA vendeu
+    162% acima de uma quarta normal, e em 31/10/2024 (Diwali) a Aura Sector 4 vendeu 113% acima.
+    O ponto frágil do calendário é Tiradentes no Rio: a lei estadual 9.224/2021 o antecipou para
+    29/03, embora seja feriado federal; no PAPA SUCIS o 21/04 ficou 22% abaixo de uma quarta
+    normal, um sinal ambíguo. O calendário segue a lei e nenhum caso de eval depende desse dia.
 - **Onde o tempo de entrega vai: cozinha ou entrega.** O tempo total sozinho fazia o dono culpar
   o entregador: no IUMPICA (São Paulo), a sexta às 20h leva 61,7 min, e é a cozinha que sobe
   (de 24,8 para 34,9 min), não o trânsito (16,4 para 17,5). O contrato ganhou quatro fases,

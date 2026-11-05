@@ -186,7 +186,8 @@ def dc_slowest_weekday(s: Silver, h: Sequence) -> tuple[object, str]:
 
 def dc_slowest_slot_march(s: Silver, h: Sequence) -> tuple[object, str]:
     (wd, hour), mean, margin = slowest_group(s, IUMPICA, *MARCH, ["iso_weekday", "local_hour"])
-    groups = [WEEKDAYS[int(wd)], [f"{int(hour)}h", f"{int(hour)} h", f"{int(hour)}:00"]]
+    hh = int(hour)
+    groups = [WEEKDAYS[int(wd)], [f"{hh}h", f"{hh} h", f"{hh}:00", f"{hh} horas", f"{hh}hs"]]
     exp = ContainsAllExpected(groups=groups)
     return exp, f"{groups[0][0]} {int(hour)}h: {mean} min, margin {margin:.1%}"
 
@@ -344,7 +345,8 @@ SPECS: tuple[Spec, ...] = (
          "Quanto do faturamento de abril veio do canal próprio?", "sales",
          ("sales_vs_baseline",), dc_own_channel_share),
     Spec("real-dc-004", PAPA_SUCIS, DC_TODAY,
-         "As vendas de abril caíram em relação a março? Quanto, em porcentagem?", "diagnosis",
+         "O total de vendas de abril caiu em relação ao total de março? Quanto, em porcentagem?",
+         "diagnosis",
          ("sales_vs_baseline",), dc_april_vs_march),
     Spec("real-dc-005", PAPA_SUCIS, DC_TODAY,
          "Qual foi o meu ticket médio em abril, e ele caiu desde janeiro?", "sales",

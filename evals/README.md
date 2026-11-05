@@ -219,6 +219,11 @@ eval database.
 
 ## Known limitations of the automatic scorers
 
+- `real-dc-015` ("cozinha ou entregador?") passes on the word "cozinha"/"preparo": a wrong
+  "não é a cozinha" would pass too. Read its answers by hand until a scorer checks the claim.
+- `no_data` markers come from how the prompts phrase it; a live run may phrase it otherwise
+  ("não tenho o motivo"). Read the failures of the first live run before trusting the score.
+
 - `number` accepts **any** number in the text, so an answer that lists many numbers can pass
   by accident. The LLM judge (still to come) is the check on explanation quality.
 - In pt-BR, "1.234" is read as 1234. An answer that writes a decimal with a dot followed by

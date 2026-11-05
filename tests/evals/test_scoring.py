@@ -198,3 +198,14 @@ def test_contains_all_needs_every_group() -> None:
     assert is_correct(case, _ans(live))
     assert not is_correct(case, _ans("A mussarela está com estoque confortável."))
     assert not is_correct(case, _ans("O tomate acaba amanhã."))
+
+
+def test_no_data_needs_the_marker_and_no_made_up_zero() -> None:
+    from evals.schema import NoDataExpected
+    from evals.scoring import says_no_data
+
+    assert says_no_data("Essa informação não existe para este restaurante.")
+    assert says_no_data("Não há dados depois de 02/03/2021: os dias seguintes faltam.")
+    assert not says_no_data("Você vendeu R$ 0,00 ontem; não há registro de pedidos.")
+    assert not says_no_data("Você vendeu R$ 7.131,00 ontem.")
+    assert NoDataExpected().type == "no_data"
