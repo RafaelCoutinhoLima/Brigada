@@ -2,8 +2,6 @@
 the gold tables and the tool SQL. Here both run over the same hand-written extracts and must
 agree, so a disagreement on the real data points at a real bug, not at the eval."""
 
-from datetime import date
-from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -105,9 +103,41 @@ def test_ranking_refuses_a_near_tie() -> None:
         top_with_margin(pd.Series({"a": -41.94, "b": -39.15}), largest=False)
 
 
+def test_compare_with_gold_agrees_on_every_extract_restaurant(
+    tables: dict[str, Any], silver: Silver
+) -> None:
+    daily = tables["gold_daily_channel_sales"].toPandas()
+    hourly = tables["gold_delivery_hourly"].toPandas()
+    rids = [int(r) for r in silver.restaurants.restaurant_id if r != 3]
+    assert real_truth.compare_with_gold(silver, daily, hourly, rids, HOLIDAYS) == []
+    broken = hourly.copy()
+    broken.loc[broken.prep_count > 0, "prep_minutes_sum"] += 60.0
+    assert any("prep_minutes" in p for p in real_truth.compare_with_gold(
+        silver, daily, broken, rids, HOLIDAYS
+    ))  # fmt: skip
+
+
 def test_range_change_is_on_totals_not_a_mean_of_days(silver: Silver) -> None:
+    # Two days: 100 on a day with baseline 50 (+100%) and 0 on a day with baseline 150 (-100%).
+    # On totals: 100 vs 200 = -50%; a mean of the daily % would say 0%.
+    assert real_truth.change_pct(100 + 0, 50 + 150) == -50.0
+
+
+def test_a_restaurant_on_two_sources_is_refused(silver: Silver) -> None:
+    doubled = Silver(
+        silver.orders,
+        silver.order_items,
+        silver.menu_items,
+        pd.concat([silver.restaurants, silver.restaurants.iloc[:1]]),
+    )
     rid = int(silver.restaurants.restaurant_id.iloc[0])
-    start, end = silver.data_range(rid)
-    rev, base, pct = real_truth.range_vs_baseline(silver, rid, start, end, HOLIDAYS)
-    assert pct is None or pct == real_truth.change_pct(rev, base)
-    assert Decimal(str(rev)) >= 0 and date(2000, 1, 1) <= start <= end
+    with pytest.raises(ValueError, match="appears 2 times"):
+        real_truth.holidays_of(doubled, rid, HOLIDAYS)
+
+
+def test_builder_refuses_a_currency_without_a_unit() -> None:
+    from evals.build_real_cases import _money
+
+    assert _money(10.0, "INR", "x")[0].unit == "inr"
+    with pytest.raises(ValueError, match="USD"):
+        _money(10.0, "USD", "x")

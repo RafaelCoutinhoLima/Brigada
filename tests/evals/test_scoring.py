@@ -209,3 +209,47 @@ def test_no_data_needs_the_marker_and_no_made_up_zero() -> None:
     assert not says_no_data("Você vendeu R$ 0,00 ontem; não há registro de pedidos.")
     assert not says_no_data("Você vendeu R$ 7.131,00 ontem.")
     assert NoDataExpected().type == "no_data"
+
+
+def _real_case(expected: dict, tools: list[str] | None = None) -> Case:
+    from evals.schema import Case
+
+    return Case.model_validate(
+        {"id": "real-x-001", "restaurant_id": 120659868, "question": "Quanto vendi?",
+         "category": "sales", "expected": expected, "expected_tools": tools or []}
+    )  # fmt: skip
+
+
+def test_a_rupee_case_needs_rupees_and_a_real_case_no_rupees() -> None:
+    from evals.schema import AnswerResult
+    from evals.scoring import is_correct
+
+    inr = _real_case({"type": "number", "value": 153535.10, "tolerance": 0.005, "unit": "inr"})
+    assert is_correct(inr, AnswerResult(text="Vendeu ₹ 1.53.535,10 ... ou seja ₹ 153.535,10."))
+    assert is_correct(inr, AnswerResult(text="153.535,10 rúpias na semana."))
+    assert not is_correct(inr, AnswerResult(text="Você vendeu R$ 153.535,10 na semana."))
+    assert not is_correct(inr, AnswerResult(text="Você vendeu 153.535,10 na semana."))
+    brl = _real_case({"type": "number", "value": 7131.0, "tolerance": 0.005, "unit": "brl"})
+    assert is_correct(brl, AnswerResult(text="Ontem você vendeu R$ 7.131,00."))
+    assert not is_correct(brl, AnswerResult(text="Ontem você vendeu ₹ 7.131,00."))
+
+
+def test_no_data_rejects_made_up_money_and_zero_words_not_hours() -> None:
+    from evals.scoring import says_no_data
+
+    assert says_no_data("Não há dados de entrega; os pedidos vão das 0h às 23h.")
+    assert says_no_data("A base não registra o tempo de entrega; a cozinha leva 18 min.")
+    assert not says_no_data("Animal Fries faturou ₹ 12.400; o preço por prato não está disponível.")
+    assert not says_no_data("Não há registro de vendas: a receita foi zero reais.")
+    assert not says_no_data("Não foi possível verificar: a ferramenta falhou.")  # an outage
+
+
+def test_no_data_counts_only_after_asking_the_tool() -> None:
+    from evals.schema import AnswerResult, ToolCall
+    from evals.scoring import score_case
+
+    case = _real_case({"type": "no_data"}, ["delivery_performance"])
+    text = "Essa informação não existe para este restaurante."
+    assert not score_case(case, AnswerResult(text=text)).passed  # never asked: lakehouse down?
+    asked = AnswerResult(text=text, tools_called=[ToolCall(name="delivery_performance")])
+    assert score_case(case, asked).passed

@@ -154,14 +154,40 @@ NO_DATA_MARKERS: tuple[str, ...] = (
     "não tem esse dado",
     "não tem essa informação",
     "não tem dados",
-    "não foi possível verificar",
+)
+# "não foi possível verificar" is what the synthesizer says when a tool failed: an outage must not
+# pass as "the dataset does not record it".
+
+_BRL = re.compile(r"r\$|\breais\b|\bbrl\b", re.IGNORECASE)
+_INR = re.compile(r"₹|\brs\.?\s*\d|\binr\b|\brupias?\b|\brúpias?\b", re.IGNORECASE)
+# An amount of money, or a zero said in words: a "no data" answer must not give either.
+_MONEY = re.compile(r"(?:r\$|₹|\brs\.?|\binr\b|\bbrl\b)\s*-?\d", re.IGNORECASE)
+_ZERO_WORDS = re.compile(
+    r"\bzero\b|\bnenhum(?:a)?\s+(?:pedido|venda|entrega)|\b0+(?:[.,]0+)?\s*(?:pedidos|vendas|reais)",
+    re.IGNORECASE,
 )
 
 
 def says_no_data(text: str) -> bool:
-    """Says the data is missing, and does not also give a zero for it: "vendeu R$ 0,00; não há
-    registro de pedidos" is the made-up zero these cases exist to catch."""
-    return contains_any(text, NO_DATA_MARKERS) and 0.0 not in extract_numbers(text)
+    """Says the data is missing, without making up an amount or a zero for it: "vendeu R$ 0,00;
+    não há registro" and "faturou ₹ 12.400; preço não disponível" both fail. Hours and dates
+    ("das 0h às 23h", "02/03/2021") are fine; so are minutes and km, which a right answer may
+    give for what the dataset does have (kitchen time, distance)."""
+    return (
+        contains_any(text, NO_DATA_MARKERS)
+        and not _MONEY.search(text)
+        and not _ZERO_WORDS.search(text)
+    )
+
+
+def currency_matches(text: str, unit: str | None) -> bool:
+    """A money answer in the right currency: rupees need a rupee marker and no R$; reais must
+    not be called rupees. Other units are not money."""
+    if unit == "inr":
+        return bool(_INR.search(text)) and not _BRL.search(text)
+    if unit == "brl":
+        return not _INR.search(text)
+    return True
 
 
 def is_refusal(text: str) -> bool:
@@ -179,7 +205,7 @@ def is_correct(case: Case, answer: AnswerResult) -> bool:
     called = {t.name for t in answer.tools_called}
     match exp:
         case NumberExpected():
-            return number_matches(answer.text, exp)
+            return number_matches(answer.text, exp) and currency_matches(answer.text, exp.unit)
         case ContainsAnyExpected():
             return contains_any(answer.text, exp.values)
         case ContainsAllExpected():
@@ -198,6 +224,9 @@ def is_correct(case: Case, answer: AnswerResult) -> bool:
 class CaseScore(BaseModel):
     correct: bool
     expected_tools_called: bool
+    # "the data does not exist" only counts after asking the tool that would have it: with the
+    # lakehouse down the agent would say the same thing for the wrong reason.
+    requires_expected_tools: bool = False
     forbidden_tools_called: list[str]
     tools_true_positive: int
     tools_called_unique: int
@@ -206,7 +235,8 @@ class CaseScore(BaseModel):
     @property
     def passed(self) -> bool:
         """A case passes if the answer is correct and no forbidden tool was called."""
-        return self.correct and not self.forbidden_tools_called
+        tools_ok = self.expected_tools_called or not self.requires_expected_tools
+        return self.correct and not self.forbidden_tools_called and tools_ok
 
 
 def score_case(case: Case, answer: AnswerResult) -> CaseScore:
@@ -215,6 +245,7 @@ def score_case(case: Case, answer: AnswerResult) -> CaseScore:
     return CaseScore(
         correct=is_correct(case, answer),
         expected_tools_called=expected <= called,
+        requires_expected_tools=isinstance(case.expected, NoDataExpected) and bool(expected),
         forbidden_tools_called=sorted(called & set(case.forbidden_tools)),
         tools_true_positive=len(called & expected),
         tools_called_unique=len(called),

@@ -237,3 +237,32 @@ async def test_commit_is_recorded_before_the_cases_run(monkeypatch: pytest.Monke
     monkeypatch.setattr(run_module, "git_commit", lambda: next(commits))
     report = await evaluate("evals.oracle:answer", subset="ci", answerer=oracle.answer)
     assert report.meta.git_commit == "at-start"
+
+
+async def test_a_case_with_its_own_today_is_answered_on_that_day(tmp_path: Path) -> None:
+    """Real-dataset cases end in 2021 or 2025: they must not be asked on the synthetic TODAY."""
+    from evals.run import run_cases
+    from evals.schema import Case
+
+    seen: dict[str, date] = {}
+
+    async def recorder(question: str, restaurant_id: int, today: date) -> AnswerResult:
+        seen[question] = today
+        return AnswerResult(text="Essa informação não existe para este restaurante.")
+
+    cases = [
+        Case.model_validate(
+            {"id": "real-x-001", "restaurant_id": 120659868, "today": "2025-02-01",
+             "question": "Qual o tempo médio de entrega?", "category": "operations",
+             "expected": {"type": "no_data"}}
+        ),
+        Case.model_validate(
+            {"id": "syn-x-001", "restaurant_id": 1, "question": "Quanto vendi ontem?",
+             "category": "sales", "expected": {"type": "no_data"}}
+        ),
+    ]  # fmt: skip
+    await run_cases(cases, recorder)
+    assert seen == {
+        "Qual o tempo médio de entrega?": date(2025, 2, 1),
+        "Quanto vendi ontem?": TODAY,
+    }

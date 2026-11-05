@@ -12,6 +12,9 @@ Usage::
         --zomato ~/Downloads/zomato/order_history_kaggle_data.csv
     uv run python -m evals.run --cases evals/cases_real.jsonl
 
+Cases tagged ``derived`` need the model to add or divide tool rows (a month total, a rate):
+they measure the arithmetic as much as the tools, so read their score apart.
+
 Every "which one" case asserts a 10% margin between the 1st and 2nd place and fails the build
 otherwise (``MarginTooSmallError``): a near tie is rewritten, never silently dropped.
 """
@@ -26,11 +29,14 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 from evals.real_truth import (
     Silver,
     baseline,
     canceled_orders,
     change_pct,
+    compare_with_gold,
     completed_orders,
     delivered,
     holidays_of,
@@ -73,7 +79,6 @@ WEEKDAYS = {
 }
 MONTHS = ["", "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
           "setembro", "outubro", "novembro", "dezembro"]  # fmt: skip
-HOLIDAY_WORDS = ["feriado"]
 
 
 def day_words(d: date) -> list[str]:
@@ -105,7 +110,10 @@ def _pct(value: float | None, note: str) -> tuple[NumberExpected, str]:
 
 
 def _money(value: float, currency: str, note: str) -> tuple[NumberExpected, str]:
-    unit = "brl" if currency == "BRL" else "inr"
+    units = {"BRL": "brl", "INR": "inr"}
+    if currency not in units:  # a new source's currency needs a unit and a scorer marker
+        raise ValueError(f"no eval unit for currency {currency!r}")
+    unit = units[currency]
     return NumberExpected(value=value, tolerance=0.005, unit=unit), note
 
 
@@ -168,7 +176,8 @@ def dc_cancel_rate_april(s: Silver, h: Sequence) -> tuple[object, str]:
     c, done = canceled_orders(s, IUMPICA, *APRIL), completed_orders(s, IUMPICA, *APRIL)
     rate = c / (c + done) * 100
     note = f"{c} canceled / {c + done} orders (canceled / completed would be {c / done:.4%})"
-    return NumberExpected(value=round(rate, 2), abs_tolerance=0.02, unit="percent"), note
+    # 0.46% passes, the 0.47% that canceled / completed rounds to does not
+    return NumberExpected(value=round(rate, 4), abs_tolerance=0.005, unit="percent"), note
 
 
 def dc_delivery_april(s: Silver, h: Sequence) -> tuple[object, str]:
@@ -233,10 +242,10 @@ def dc_friday_night_culprit(s: Silver, h: Sequence) -> tuple[object, str]:
         }
     )
     phase, margin = top_with_margin(rise)
-    words = {
+    words = {  # disjoint: a word of one phase never passes for another
         "prep": ["cozinha", "preparo", "produção"],
-        "pickup": ["coleta", "retirada", "entregador demora a sair"],
-        "transit": ["trânsito", "percurso", "entregador"],
+        "pickup": ["coleta", "retirada", "saída do entregador"],
+        "transit": ["trânsito", "percurso", "no caminho"],
     }[str(phase)]
     note = f"Friday 20h minus the rest: {rise.round(2).to_dict()}, margin {margin:.1%}"
     return ContainsAnyExpected(values=words), note
@@ -247,7 +256,8 @@ def dc_holiday_drop(s: Silver, h: Sequence) -> tuple[object, str]:
     name = holidays_of(s, PAPA_SUCIS, h)[day]
     base, _ = baseline(s, PAPA_SUCIS, day, h)
     pct = change_pct(revenue(s, PAPA_SUCIS, day, day), base)
-    exp = ContainsAnyExpected(values=[*HOLIDAY_WORDS, "Paixão", "Sexta-feira Santa"])
+    # the holiday's name, not just "feriado" ("não foi feriado" would pass on the word)
+    exp = ContainsAnyExpected(values=["Paixão", "Sexta-feira Santa"])
     return exp, f"{day} was {name}: {pct}% vs normal Fridays"
 
 
@@ -325,7 +335,7 @@ def z_diwali(s: Silver, h: Sequence) -> tuple[object, str]:
     day = date(2024, 10, 31)
     assert holidays_of(s, AURA_S4, h)[day] == "Diwali"
     pct = change_pct(revenue(s, AURA_S4, day, day), baseline(s, AURA_S4, day, h)[0])
-    return ContainsAnyExpected(values=["Diwali", *HOLIDAY_WORDS]), f"{day}: {pct}% vs normal"
+    return ContainsAnyExpected(values=["Diwali"]), f"{day}: {pct}% vs normal"
 
 
 # Gaps: in scope, in the data, but no tool exposes them yet. The right answer is "not available".
@@ -340,21 +350,21 @@ SPECS: tuple[Spec, ...] = (
          ("sales_vs_baseline",), dc_yesterday),
     Spec("real-dc-002", IUMPICA, DC_TODAY,
          "Como foram as vendas dos últimos 7 dias comparado com o normal?", "diagnosis",
-         ("sales_vs_baseline",), dc_last7_vs_normal),
+         ("sales_vs_baseline",), dc_last7_vs_normal, ("real", "derived")),
     Spec("real-dc-003", PAPA_SUCIS, DC_TODAY,
          "Quanto do faturamento de abril veio do canal próprio?", "sales",
-         ("sales_vs_baseline",), dc_own_channel_share),
+         ("sales_vs_baseline",), dc_own_channel_share, ("real", "derived")),
     Spec("real-dc-004", PAPA_SUCIS, DC_TODAY,
          "O total de vendas de abril caiu em relação ao total de março? Quanto, em porcentagem?",
          "diagnosis",
-         ("sales_vs_baseline",), dc_april_vs_march),
+         ("sales_vs_baseline",), dc_april_vs_march, ("real", "derived")),
     Spec("real-dc-005", PAPA_SUCIS, DC_TODAY,
          "Qual foi o meu ticket médio em abril, e ele caiu desde janeiro?", "sales",
-         ("sales_vs_baseline",), dc_ticket_april),
+         ("sales_vs_baseline",), dc_ticket_april, ("real", "derived")),
     Spec("real-dc-006", PAPA_SUCIS, DC_TODAY, "Quantos pedidos foram cancelados em abril?",
-         "sales", ("sales_vs_baseline",), dc_canceled_april),
+         "sales", ("sales_vs_baseline",), dc_canceled_april, ("real", "derived")),
     Spec("real-dc-007", IUMPICA, DC_TODAY, "Qual foi minha taxa de cancelamento em abril?",
-         "sales", ("sales_vs_baseline",), dc_cancel_rate_april),
+         "sales", ("sales_vs_baseline",), dc_cancel_rate_april, ("real", "derived")),
     Spec("real-dc-008", PAPA_SUCIS, DC_TODAY, "Qual o tempo médio de entrega em abril?",
          "operations", ("delivery_performance",), dc_delivery_april),
     Spec("real-dc-009", IUMPICA, DC_TODAY, "Em que dia da semana a entrega demora mais?",
@@ -363,7 +373,7 @@ SPECS: tuple[Spec, ...] = (
          "Em março, qual dia da semana e horário teve a entrega mais lenta?", "operations",
          ("delivery_performance",), dc_slowest_slot_march),
     Spec("real-dc-011", IUMPICA, DC_TODAY, "Em abril, qual dia da semana vendeu menos?",
-         "sales", ("sales_vs_baseline",), dc_weakest_weekday_april),
+         "sales", ("sales_vs_baseline",), dc_weakest_weekday_april, ("real", "derived")),
     Spec("real-dc-012", DC_STOPPED, DC_TODAY, "Quanto eu vendi ontem?", "sales",
          ("sales_vs_baseline",), dc_stopped),
     Spec("real-dc-013", PAPA_SUCIS, DC_TODAY,
@@ -384,7 +394,7 @@ SPECS: tuple[Spec, ...] = (
          "Como foram as vendas de ontem comparado com o normal, em porcentagem?", "diagnosis",
          ("sales_vs_baseline",), z_yesterday_vs_normal),
     Spec("real-zomato-002", AURA_GK2, ZOMATO_TODAY, "Quanto eu vendi na última semana?",
-         "sales", ("sales_vs_baseline",), z_last_week),
+         "sales", ("sales_vs_baseline",), z_last_week, ("real", "derived")),
     Spec("real-zomato-003", AURA_S4, ZOMATO_TODAY,
          "Qual prato mais vendeu nas últimas 4 semanas?", "menu", ("item_trends",), z_top_dish),
     Spec("real-zomato-004", AURA_GK2, ZOMATO_TODAY,
@@ -396,7 +406,7 @@ SPECS: tuple[Spec, ...] = (
          "Que prato está perdendo saída nas últimas 4 semanas?", "menu", ("item_trends",),
          z_dish_drop_swaad),
     Spec("real-zomato-007", AURA_GK2, ZOMATO_TODAY, "Quantos pedidos foram cancelados em janeiro?",
-         "sales", ("sales_vs_baseline",), z_canceled_january),
+         "sales", ("sales_vs_baseline",), z_canceled_january, ("real", "derived")),
     Spec("real-zomato-008", AURA_S4, ZOMATO_TODAY,
          "Qual prato me deu mais faturamento nas últimas 4 semanas?", "menu", ("item_trends",),
          z_dish_revenue),
@@ -451,8 +461,11 @@ def build_cases(s: Silver, holidays: Sequence) -> list[Case]:
     return cases
 
 
-def silver_from_downloads(delivery_center: Path, zomato_file: Path) -> Silver:
-    """Run the pipeline's own bronze -> silver on a local Spark over the downloads."""
+def silver_from_downloads(
+    delivery_center: Path, zomato_file: Path
+) -> tuple[Silver, pd.DataFrame, pd.DataFrame]:
+    """Run the pipeline's own bronze -> silver -> gold on a local Spark over the downloads;
+    the gold comes back only to be checked against the independent formulas."""
     sys.path.insert(0, str(ROOT / "lakehouse" / "src"))
     from brigada_lakehouse.build import build
     from pyspark.sql import SparkSession
@@ -476,8 +489,10 @@ def silver_from_downloads(delivery_center: Path, zomato_file: Path) -> Silver:
             for name in ("silver_orders", "silver_order_items", "silver_menu_items")
         ]
         restaurants = t["silver_restaurants"].toPandas()
+        daily = t["gold_daily_channel_sales"].toPandas()
+        hourly = t["gold_delivery_hourly"].toPandas()
         spark.stop()
-    return Silver.from_frames(*frames, restaurants)
+    return Silver.from_frames(*frames, restaurants), daily, hourly
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -490,7 +505,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     sys.path.insert(0, str(ROOT / "lakehouse" / "src"))
     from brigada_lakehouse.holidays import HOLIDAYS
 
-    silver = silver_from_downloads(args.delivery_center.expanduser(), args.zomato.expanduser())
+    silver, daily, hourly = silver_from_downloads(
+        args.delivery_center.expanduser(), args.zomato.expanduser()
+    )
+    used = sorted({spec.restaurant_id for spec in SPECS})
+    problems = compare_with_gold(silver, daily, hourly, used, HOLIDAYS)
+    if problems:  # the formulas and the lakehouse disagree: fix that before grading anyone
+        print("ground truth and gold disagree:", *problems[:20], sep="\n  ", file=sys.stderr)
+        return 1
     cases = build_cases(silver, HOLIDAYS)
     args.out.write_text(
         "".join(c.model_dump_json(exclude_none=True) + "\n" for c in cases), encoding="utf-8"

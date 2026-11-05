@@ -76,16 +76,25 @@ def ground_truth_text(case: Case) -> str:
 REAL_CASES_PATH = CASES_PATH.with_name("cases_real.jsonl")
 
 
-@cache
-def _index() -> dict[tuple[int, str], Case]:
-    cases = load_cases()
-    if REAL_CASES_PATH.exists():
-        cases += load_cases(REAL_CASES_PATH)
+def _by_question(cases: list[Case]) -> dict[tuple[int, str], Case]:
     return {(c.restaurant_id, c.question.strip().lower()): c for c in cases}
 
 
+@cache
+def _index() -> dict[tuple[int, str], Case]:
+    return _by_question(load_cases())
+
+
+@cache
+def _real_index() -> dict[tuple[int, str], Case]:
+    """Read only when a question is not a synthetic case: the file is local and git-ignored,
+    so the synthetic self-test never depends on it."""
+    return _by_question(load_cases(REAL_CASES_PATH)) if REAL_CASES_PATH.exists() else {}
+
+
 async def answer(question: str, restaurant_id: int, today: date) -> AnswerResult:
-    case = _index().get((restaurant_id, question.strip().lower()))
+    key = (restaurant_id, question.strip().lower())
+    case = _index().get(key) or _real_index().get(key)
     if case is None:
         raise KeyError(f"oracle has no case for restaurant {restaurant_id}: {question!r}")
     return AnswerResult(

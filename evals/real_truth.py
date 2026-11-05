@@ -88,7 +88,10 @@ def holidays_of(s: Silver, rid: int, holidays: Sequence) -> dict[date, str]:
     """The holidays that apply to the restaurant: same country; a holiday's state and city,
     when set, equal to the restaurant's (so a Rio holiday never reaches a restaurant without a
     state, even one in a city called Rio de Janeiro)."""
-    r = s.restaurants[s.restaurants.restaurant_id == rid].iloc[0]
+    found = s.restaurants[s.restaurants.restaurant_id == rid]
+    if len(found) != 1:  # two sources on one id would make every answer a guess
+        raise ValueError(f"restaurant {rid} appears {len(found)} times in silver")
+    r = found.iloc[0]
     state = None if pd.isna(r["state"]) else str(r["state"]).upper()  # NULL arrives as NaN
     city = None if pd.isna(r["city"]) else str(r["city"]).lower()
     out: dict[date, list[str]] = {}
@@ -209,3 +212,65 @@ def top_with_margin(values: pd.Series, *, largest: bool = True) -> tuple[object,
             f"margin {margin:.1%} < {MIN_MARGIN:.0%}"
         )
     return ordered.index[0], round(margin, 4)
+
+
+# Agreement with the lakehouse ----------------------------------------------------------------
+
+DELIVERY_MEASURES = (
+    ("delivery_minutes", "delivery_minutes_sum", "timed_orders"),
+    ("prep_minutes", "prep_minutes_sum", "prep_count"),
+    ("pickup_minutes", "pickup_minutes_sum", "pickup_count"),
+    ("transit_minutes", "transit_minutes_sum", "transit_count"),
+    ("rider_wait_minutes", "rider_wait_minutes_sum", "rider_wait_count"),
+    ("distance_km", "distance_km_sum", "distance_count"),
+)
+
+
+def compare_with_gold(
+    s: Silver,
+    daily: pd.DataFrame,
+    hourly: pd.DataFrame,
+    restaurant_ids: Sequence[int],
+    holidays: Sequence,
+) -> list[str]:
+    """Where these formulas and the gold tables disagree, for the given restaurants: every
+    day's baseline (count and value) and every delivery mean over the whole history. Empty
+    means they agree; the eval build refuses to write cases otherwise."""
+    problems: list[str] = []
+    for rid in restaurant_ids:
+        d = daily[daily.restaurant_id == rid]
+        per_day = d.groupby("day").agg(
+            base=(
+                "baseline_revenue",
+                lambda x: None if x.isna().all() else float(x.astype(float).sum()),
+            ),
+            weeks=("baseline_weeks", "min"),
+        )
+        for day, row in per_day.iterrows():
+            base, weeks = baseline(s, rid, pd.Timestamp(day).date(), holidays)
+            theirs = None if row.base is None or pd.isna(row.base) else row.base
+            if (
+                weeks != row.weeks
+                or (base is None) != (theirs is None)
+                or (base is not None and abs(base - theirs) > 0.03)
+            ):
+                problems.append(
+                    f"{rid} {day}: baseline {base} ({weeks}) vs gold {theirs} ({row.weeks})"
+                )
+        h = hourly[hourly.restaurant_id == rid]
+        if h.empty:
+            continue
+        start, end = pd.Timestamp(h.day.min()).date(), pd.Timestamp(h.day.max()).date()
+        deliv = delivered(s, rid, start, end)
+        if len(deliv) != int(h.delivered_orders.sum()):
+            problems.append(
+                f"{rid}: {len(deliv)} delivered vs gold {int(h.delivered_orders.sum())}"
+            )
+        for column, total, count in DELIVERY_MEASURES:
+            mine, n = mean_of(deliv, column), int(h[count].sum())
+            theirs = None if n == 0 else round(float(h[total].sum()) / n, 2)
+            if (mine is None) != (theirs is None) or (
+                mine is not None and abs(mine - theirs) > 0.011
+            ):
+                problems.append(f"{rid} {column}: {mine} vs gold {theirs}")
+    return problems

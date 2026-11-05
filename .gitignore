@@ -8,6 +8,6 @@ dist/
 *.egg-info/
 evals/results/
 # built locally from the Kaggle downloads (evals/build_real_cases.py); the data is not ours
-evals/cases_real.jsonl
+evals/cases_real*.jsonl
 models/*.joblib
 .DS_Store
