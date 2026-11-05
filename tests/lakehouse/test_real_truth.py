@@ -6,10 +6,12 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-import pandas as pd
 import pytest
 
+# pyspark (and pandas, which comes with it) live in the optional spark group: the test and db
+# CI jobs do not install them, so skip before importing either.
 pytest.importorskip("pyspark")
+pd = pytest.importorskip("pandas")
 
 from brigada_lakehouse import gold  # noqa: E402
 from brigada_lakehouse.holidays import HOLIDAYS  # noqa: E402
