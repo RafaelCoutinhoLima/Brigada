@@ -42,17 +42,22 @@ WHERE restaurants.data_source = 'lakehouse'
 
 def to_registry_rows(gold_rows: Sequence[Row], min_orders: int) -> list[Row]:
     """gold_restaurants rows -> restaurants rows. Skips Brigada's own and the small ones."""
+    from brigada.safe_text import is_safe_name
+
     out = []
     for r in gold_rows:
         if r["source"] == "brigada" or int(r["completed_orders"] or 0) < min_orders:
             continue
-        city = r["city"] or "?"
+        # The pipeline already filters names; checked again because this copy feeds the run
+        # context of the system prompt. A name that fails is replaced, never copied.
+        name = str(r["name"]) if is_safe_name(r["name"]) else f"Restaurante {r['restaurant_id']}"
+        city = r["city"] if is_safe_name(r["city"]) else "?"
         if r.get("state"):
             city = f"{city}/{r['state']}"
         out.append(
             {
                 "id": int(r["restaurant_id"]),
-                "name": str(r["name"]),
+                "name": name,
                 "cuisine": f"{r['segment'] or 'food'} ({r['source']})",
                 "city": city,
                 "source": str(r["source"]),

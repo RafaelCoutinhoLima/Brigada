@@ -222,5 +222,5 @@ async def test_planner_knows_the_restaurant_name_to_refuse_other_restaurants() -
         with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
             conn.execute("DELETE FROM orchestrations WHERE id = %s", (oid,))
     system = system_text(client.messages.requests["planner"][0])
-    assert "restaurante do dono: Sabor da Casa (restaurant_id 2)" in system
+    assert 'restaurante do dono: "Sabor da Casa" (restaurant_id 2;' in system
     assert "outro restaurante" in system  # the rule the name is there for
