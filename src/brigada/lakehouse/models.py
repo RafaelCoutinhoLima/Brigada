@@ -17,6 +17,7 @@ from pydantic import Field, model_validator
 from brigada.mcp_server.models import RestaurantId, _check_range, _Input, _Output
 
 MAX_BASELINE_RANGE_DAYS = 31
+EARLIEST_DATE = date(2000, 1, 1)
 
 TrendDays = Annotated[
     int,
@@ -66,6 +67,13 @@ class ItemTrendsInput(_Input):
     days: TrendDays = 7
     limit: TrendLimit = 10
     order_by: TrendOrderBy = "drop"
+
+    @model_validator(mode="after")
+    def _plausible_end(self) -> Self:
+        # date(1, 1, 3) - 56 days overflows: a validation error, not a fake "warehouse down"
+        if self.end_date < EARLIEST_DATE:
+            raise ValueError(f"end_date must be on or after {EARLIEST_DATE.isoformat()}")
+        return self
 
 
 CURRENCY_FIELD = Field(

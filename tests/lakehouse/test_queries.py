@@ -434,3 +434,64 @@ def test_zomato_has_kitchen_time_without_delivery_time() -> None:
     assert result.overall.mean_prep_minutes == 18.0
     assert result.overall.mean_rider_wait_minutes == 8.0
     assert result.note is not None and "kitchen time" in result.note
+
+
+def test_a_restaurant_id_in_two_sources_fails_closed() -> None:
+    fetch = FakeWarehouse([_channel("app", 100.0, 100.0)], DAY, DAY)
+    fetch.coverage = fetch.coverage * 2  # the same id from two sources
+    inp = SalesVsBaselineInput(restaurant_id=1, start_date=DAY, end_date=DAY)
+    with pytest.raises(RuntimeError, match="appears 2 times"):
+        queries.sales_vs_baseline(fetch, inp, TABLES)
+
+
+def test_no_order_lines_means_no_revenue_total_not_zero() -> None:
+    fetch = FakeWarehouse([], date(2021, 1, 1), date(2021, 4, 30), source="delivery_center")
+    inp = ItemTrendsInput(restaurant_id=1_000_053, end_date=date(2021, 4, 30))
+    result = queries.item_trends(fetch, inp, TABLES)
+    assert result.total_revenue_current is None and result.total_revenue_previous is None
+
+
+def test_days_before_the_data_starts_are_missing_not_zero() -> None:
+    fetch = FakeWarehouse([], date(2021, 1, 2), date(2021, 4, 30), source="delivery_center")
+    before = SalesVsBaselineInput(
+        restaurant_id=1_000_053, start_date=date(2020, 12, 1), end_date=date(2020, 12, 3)
+    )
+    note = queries.sales_vs_baseline(fetch, before, TABLES).note
+    assert note is not None and "only from 2021-01-02" in note and "before it" in note
+    straddle = before.model_copy(
+        update={"end_date": date(2021, 1, 1), "start_date": date(2020, 12, 25)}
+    )
+    assert "missing" in (queries.sales_vs_baseline(fetch, straddle, TABLES).note or "")
+
+
+def test_a_holiday_note_keeps_the_missing_days_note() -> None:
+    fetch = FakeWarehouse(
+        [_channel("app", 100.0, 1000.0, holiday="Sexta-feira da Paixão")], date(2026, 7, 30), DAY
+    )
+    inp = SalesVsBaselineInput(restaurant_id=1, start_date=DAY, end_date=date(2026, 10, 29))
+    note = queries.sales_vs_baseline(fetch, inp, TABLES).note or ""
+    assert "missing, not zero" in note and "Sexta-feira da Paixão" in note
+
+
+def test_mean_delivery_divides_by_the_timed_orders_only() -> None:
+    # 10 delivered, 6 with a time (the other 4 only have a distance): 300 / 6, not 300 / 10.
+    rows = [_hourly("20", 10, 300.0, 0.0, 0, 0, 20.0, 10, timed=6)]
+    fetch = FakeWarehouse(rows, date(2021, 1, 1), date(2021, 4, 30), source="delivery_center")
+    inp = DeliveryPerformanceInput(
+        restaurant_id=1_000_053, start_date=date(2021, 4, 1), end_date=date(2021, 4, 30)
+    )
+    overall = queries.delivery_performance(fetch, inp, TABLES).overall
+    assert overall is not None and overall.mean_delivery_minutes == 50.0
+    assert overall.delivered_orders == 10 and overall.timed_orders == 6
+
+
+def test_the_result_names_the_table_not_the_catalog() -> None:
+    fetch = FakeWarehouse([], DAY, DAY)
+    inp = SalesVsBaselineInput(restaurant_id=1, start_date=DAY, end_date=DAY)
+    source = queries.sales_vs_baseline(fetch, inp, TABLES).source
+    assert source == "lakehouse gold_daily_channel_sales" and "workspace" not in source
+
+
+def test_item_trends_rejects_an_ancient_end_date() -> None:
+    with pytest.raises(ValidationError, match="on or after 2000-01-01"):
+        ItemTrendsInput(restaurant_id=1, end_date=date(1, 1, 3))

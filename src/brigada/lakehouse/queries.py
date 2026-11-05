@@ -93,7 +93,8 @@ def _as_date(value: Any) -> date | None:
 
 
 def _label(table: str) -> str:
-    return f"lakehouse {table.replace('`', '')}"
+    """'lakehouse gold_x': the table, never the catalog and schema (deployment detail)."""
+    return f"lakehouse {table.replace('`', '').rsplit('.', 1)[-1]}"
 
 
 def coverage(fetch: Fetch, tables: GoldTables, restaurant_id: int) -> Coverage:
@@ -104,15 +105,29 @@ def coverage(fetch: Fetch, tables: GoldTables, restaurant_id: int) -> Coverage:
     )
     if not rows:
         return Coverage(None, None, None, None)
+    if len(rows) > 1:
+        # Two sources mapped to one id: answering would mix their orders (and currencies).
+        # Fail closed; _run_lakehouse logs it and the model gets the generic error.
+        raise RuntimeError(f"restaurant {restaurant_id} appears {len(rows)} times in gold")
     r = rows[0]
     return Coverage(r["source"], r["currency"], _as_date(r["data_from"]), _as_date(r["data_until"]))
 
 
-def _missing_note(cov: Coverage, end: date, fallback: str) -> str | None:
+def _missing_note(cov: Coverage, end: date, fallback: str, start: date | None = None) -> str | None:
     if cov.data_until is None:
         return (
             "The lakehouse has no data for this restaurant: the upload or the refresh job has "
             f"not run. {fallback}"
+        )
+    if cov.data_from is not None and end < cov.data_from:
+        return (
+            f"The lakehouse has data for this restaurant only from {cov.data_from.isoformat()}: "
+            "the days asked are before it, missing, not zero."
+        )
+    if cov.data_from is not None and start is not None and start < cov.data_from:
+        return (
+            f"The lakehouse has data for this restaurant only from {cov.data_from.isoformat()}: "
+            "earlier days are missing, not zero."
         )
     if cov.data_until < end:
         return (
@@ -185,7 +200,9 @@ def sales_vs_baseline(
             )
         )
 
-    note = _missing_note(cov, inp.end_date, "Use sales_by_period for them if available.")
+    note = _missing_note(
+        cov, inp.end_date, "Use sales_by_period for them if available.", inp.start_date
+    )
     holidays = [f"{d.day.isoformat()} ({d.holiday})" for d in days if d.holiday]
     if holidays:
         flagged = (
@@ -234,7 +251,8 @@ def item_trends(fetch: Fetch, inp: ItemTrendsInput, tables: GoldTables) -> ItemT
 
     # Gold leaves revenue NULL on every row of a restaurant whose source has no item prices;
     # the CASE ... ELSE 0 above would turn that into 0, so priced_rows decides.
-    priced = all(int(r["priced_rows"] or 0) > 0 for r in rows)
+    # all([]) is True: without rows there is nothing priced, so no revenue (not a 0 total).
+    priced = bool(rows) and all(int(r["priced_rows"] or 0) > 0 for r in rows)
     items = []
     for r in rows:
         qty_current, qty_previous = int(r["qty_current"] or 0), int(r["qty_previous"] or 0)
@@ -419,7 +437,9 @@ def delivery_performance(
         groups.sort(key=sort_key)
 
     overall = _delivery_group("all", totals)
-    note = _missing_note(cov, inp.end_date, "Use delivery_times for them if available.")
+    note = _missing_note(
+        cov, inp.end_date, "Use delivery_times for them if available.", inp.start_date
+    )
     if overall is not None and overall.timed_orders == 0:
         untimed = (
             f"This restaurant's dataset ({cov.data_source}) records no delivery time: "
