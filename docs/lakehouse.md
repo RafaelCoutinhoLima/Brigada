@@ -222,6 +222,52 @@ Center, que prato vendeu mais, avaliações e tempo prometido; no Zomato, fatura
 
 No console (`/console`), o especialista de Vendas mostra as duas ferramentas novas.
 
+## 7. Eval com dados reais
+
+Os casos de avaliação dos restaurantes reais saem dos próprios downloads, calculados em pandas
+sobre o silver, sem passar pelo gold nem pelas consultas das ferramentas
+(`evals/build_real_cases.py`, detalhes em `evals/README.md`). O agente responde lendo o
+lakehouse no Databricks: se os dois discordarem, é defeito em algum dos lados.
+
+1. Com o pipeline rodado (passo 5) e o `.env` preenchido (passo 6), cadastre os restaurantes
+   reais no banco do eval (`brigada_eval`, com a migration 0010 aplicada):
+
+```bash
+DATABASE_URL=postgresql://brigada:brigada@localhost:55434/brigada_eval \
+  uv run python scripts/register_lakehouse_restaurants.py --min-orders 100
+```
+
+2. Gere os casos e confira o harness com o oracle (deve dar 100%):
+
+```bash
+uv run python -m evals.build_real_cases --delivery-center ~/Downloads/delivery-center \
+  --zomato ~/Downloads/zomato/order_history_kaggle_data.csv
+uv run python -m evals.run --cases evals/cases_real.jsonl --answerer evals.oracle:answer
+```
+
+3. Rode ao vivo:
+
+```bash
+DATABASE_URL=postgresql://brigada:brigada@localhost:55434/brigada_eval TOOL_TIMEOUT_SECONDS=60 \
+  uv run python -m evals.run --cases evals/cases_real.jsonl --concurrency 2
+```
+
+O arquivo `evals/cases_real.jsonl` não entra no git (dado de terceiros, com nomes reais).
+
+### Pelo navegador, sem a CLI
+
+Os passos 3 e 5 também podem ser feitos na interface:
+
+- **Volume:** Catalog > `workspace` > criar schema `brigada` e Volume `raw` > Upload. O que
+  importa é a pasta: `raw/delivery_center/<tabela>/` (orders, stores, hubs, channels,
+  deliveries) e `raw/zomato/orders/` com o `order_history_kaggle_data.csv`.
+- **Código:** Workspace > Create > Git folder com a URL do repositório.
+- **Pipeline:** Jobs & Pipelines > Create > ETL pipeline, serverless, catálogo `workspace`,
+  schema `brigada`, código-fonte o notebook `lakehouse/src/pipeline.py` da Git folder, e em
+  Configuration: `bundle.sourcePath` = a pasta `lakehouse/src` da Git folder,
+  `brigada.raw_path` = `/Volumes/workspace/brigada/raw`, `brigada.sources` =
+  `brigada,delivery_center,zomato`. Start com full refresh.
+
 ## Quando algo dá errado
 
 | Sintoma | Causa provável |

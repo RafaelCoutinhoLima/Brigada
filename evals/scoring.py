@@ -32,6 +32,7 @@ from evals.schema import (
     ContainsAllExpected,
     ContainsAnyExpected,
     EntityExpected,
+    NoDataExpected,
     NoToolCalledExpected,
     NumberExpected,
     RefusalExpected,
@@ -129,6 +130,38 @@ REFUSAL_MARKERS: tuple[str, ...] = (
 )
 
 
+# "The dataset does not have it" phrasings (case/accent-insensitive, whole words).
+NO_DATA_MARKERS: tuple[str, ...] = (
+    "não existe",
+    "não existem",
+    "não há dado",
+    "não há dados",
+    "não há registro",
+    "não tenho esse dado",
+    "não tenho essa informação",
+    "não tenho dados",
+    "não temos esse dado",
+    "não temos essa informação",
+    "não registra",
+    "não está disponível",
+    "não estão disponíveis",
+    "não disponível",
+    "sem dados",
+    "sem esse dado",
+    "não traz",
+    "não informa",
+    "não possui",
+    "não tem esse dado",
+    "não tem essa informação",
+    "não tem dados",
+    "não foi possível verificar",
+)
+
+
+def says_no_data(text: str) -> bool:
+    return contains_any(text, NO_DATA_MARKERS)
+
+
 def is_refusal(text: str) -> bool:
     return contains_any(text, REFUSAL_MARKERS)
 
@@ -155,6 +188,8 @@ def is_correct(case: Case, answer: AnswerResult) -> bool:
             return not (called & set(exp.tools))
         case RefusalExpected():
             return is_refusal(answer.text)
+        case NoDataExpected():
+            return says_no_data(answer.text)
     raise TypeError(f"unknown expected type: {type(exp).__name__}")  # pragma: no cover
 
 

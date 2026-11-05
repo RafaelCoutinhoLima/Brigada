@@ -214,7 +214,8 @@ async def run_cases(
 
     async def bounded(case: Case) -> CaseResult:
         async with sem:
-            return await run_case(answerer, case, today, timeout_s)
+            # Real-dataset cases carry their own "today" (their data ends in 2021 or 2025).
+            return await run_case(answerer, case, case.today or today, timeout_s)
 
     return list(await asyncio.gather(*(bounded(c) for c in cases)))
 

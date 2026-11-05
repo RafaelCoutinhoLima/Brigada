@@ -181,6 +181,42 @@ To update the README results table from a run:
 uv run python scripts/update_readme_results.py evals/results/<run>.json
 ```
 
+## Real-dataset cases
+
+The synthetic world has a planted ground truth; the real restaurants of the lakehouse
+(Delivery Center, Brazil 2021; Zomato, India 2024-25, ADR 0009) do not. `evals/build_real_cases.py`
+computes 35 cases for them from the conformed silver of the Kaggle downloads:
+
+```bash
+uv run python -m evals.build_real_cases \
+    --delivery-center ~/Downloads/delivery-center \
+    --zomato ~/Downloads/zomato/order_history_kaggle_data.csv   # writes evals/cases_real.jsonl
+uv run python -m evals.run --cases evals/cases_real.jsonl --answerer evals.oracle:answer
+uv run python -m evals.run --cases evals/cases_real.jsonl           # live, needs the lakehouse
+uv run python -m evals.run --cases evals/cases_real.jsonl --subset gap
+```
+
+- **Independent ground truth.** The answers come from `evals/real_truth.py`, pandas formulas
+  over silver written apart from the gold tables and the tool SQL (only the holiday *data* is
+  shared). `tests/lakehouse/test_real_truth.py` runs both over the hand-written extracts and
+  requires them to agree, so on the real data a mismatch means a bug, not a bad eval.
+- **No near ties.** Every "which one" case asserts a 10% gap between the 1st and 2nd place and
+  the build fails otherwise. Two cases were rewritten or dropped this way (the worst days of
+  April are three days within 3 points of each other once Good Friday leaves the baseline).
+- **Per-case `today`** (2021-05-01 or 2025-02-01): their data ends there.
+- **`no_data` cases** expect "this dataset does not record it" (`NO_DATA_MARKERS`), not a scope
+  refusal and never a zero: delivery promise, dish revenue and delivery time on Zomato, days
+  after the data ends.
+- **`gap` subset**: questions the data answers but no tool exposes yet (rating, discounts,
+  returning customers, rejection reasons, cancellations per hour, canceled revenue). Today the
+  right answer is "not available"; when a tool lands, the case becomes a number.
+- **Not committed.** The file is derived from datasets that are not ours (`.gitignore`); it
+  names real restaurants. Rebuild it from the downloads.
+
+The live run answers through the lakehouse tools, so it needs the pipeline in Databricks and the
+`DATABRICKS_*` settings (docs/lakehouse.md, step 7) and the real restaurants registered in the
+eval database.
+
 ## Known limitations of the automatic scorers
 
 - `number` accepts **any** number in the text, so an answer that lists many numbers can pass

@@ -263,8 +263,14 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   - o gold pode estar atrasado: o export não é contínuo (sem CDC);
   - o warehouse do Free Edition desliga quando ocioso, e a primeira consulta pode passar do
     `TOOL_TIMEOUT_SECONDS` padrão (15 s);
-  - restaurantes reais não têm gabarito: os evals continuam no sintético, e perguntas sobre os
-    reais só têm os testes do pipeline como garantia;
+  - o gabarito dos restaurantes reais é o próprio dado: 35 casos calculados em pandas sobre o
+    silver dos downloads (`evals/build_real_cases.py`), escritos à parte do gold e do SQL das
+    ferramentas (só a lista de feriados é compartilhada), com um teste que exige que os dois
+    lados concordem nos recortes. Ele mede se o agente responde certo sobre o que o pipeline
+    tratou, não se o tratamento está certo (isso são os testes do pipeline). Pergunta do tipo
+    "qual" só entra com 10% de folga entre o 1º e o 2º; "pior dia de abril" saiu porque, sem a
+    Sexta-feira Santa na média, três dias ficam a menos de 3 pontos um do outro. O arquivo não
+    entra no git (dado de terceiros, nomes reais);
   - o Delivery Center é de 2021 e o Zomato vai até jan/2025: perguntas sobre eles precisam de
     `--today` logo depois do fim de cada base;
   - no Zomato, "qual canal mais cancelou" é trivial (um canal só), "em que hora a entrega
@@ -281,8 +287,9 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
     real inteira (fora da CI);
   - no eval ao vivo com o lakehouse ligado: os casos de queda de vendas acertam com menos
     passos que com só o Postgres. Ainda não medido.
-- **Próximos passos possíveis:** casos de eval sobre os restaurantes reais com gabarito tirado
-  do gold; tempo de preparo e nota do Zomato numa ferramenta (a nota com o viés de seleção
+- **Próximos passos possíveis:** as ferramentas que os casos `gap` cobram (nota com o número
+  de avaliações, desconto, cancelamento por hora e receita perdida, motivo da rejeição;
+  recorrência só como contagem agregada, nunca o id do cliente); tempo de preparo e nota do Zomato numa ferramenta (a nota com o viés de seleção
   explicado); comentários do Zomato como texto não confiável, pelo mesmo caminho das avaliações
   de hoje; ingestão incremental com Auto Loader; CDC do
   Postgres.

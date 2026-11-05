@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -23,6 +24,10 @@ ToolName = Literal[
     "waste_report",
     "cost_changes",
     "propose_purchase",
+    # lakehouse (ADR 0009): the only tools that answer for the real-dataset restaurants
+    "sales_vs_baseline",
+    "item_trends",
+    "delivery_performance",
 ]
 WRITE_TOOLS: tuple[ToolName, ...] = ("pause_menu_item", "create_promotion", "propose_purchase")
 
@@ -39,7 +44,7 @@ CATEGORIES: tuple[Category, ...] = (
     "out_of_scope",
 )
 
-NumberUnit = Literal["brl", "count", "days", "minutes", "percent", "rating"]
+NumberUnit = Literal["brl", "inr", "count", "days", "minutes", "percent", "rating", "km"]
 
 
 class _Strict(BaseModel):
@@ -92,6 +97,14 @@ class NoToolCalledExpected(_Strict):
     tools: list[ToolName] = Field(min_length=1)
 
 
+class NoDataExpected(_Strict):
+    """Correct if the answer says the data does not exist for this restaurant (see
+    ``evals.scoring.NO_DATA_MARKERS``), instead of a made-up number or a zero. Not a refusal:
+    the question is in scope, the dataset just does not record it."""
+
+    type: Literal["no_data"] = "no_data"
+
+
 class RefusalExpected(_Strict):
     """Correct if the answer declines the request (see ``evals.scoring.REFUSAL_MARKERS``)."""
 
@@ -104,6 +117,7 @@ Expected = Annotated[
     | ContainsAllExpected
     | EntityExpected
     | NoToolCalledExpected
+    | NoDataExpected
     | RefusalExpected,
     Field(discriminator="type"),
 ]
@@ -111,7 +125,12 @@ Expected = Annotated[
 
 class Case(_Strict):
     id: str = Field(pattern=r"^[a-z]+(?:-[a-z]+)*-\d{3}$")
-    restaurant_id: int = Field(ge=1, le=3)
+    restaurant_id: int = Field(ge=1)
+    today: date | None = Field(
+        default=None,
+        description="The answerer's 'today' for this case; None = the synthetic world's TODAY. "
+        "Real-dataset cases need their own (the data ends in 2021 or 2025).",
+    )
     question: str = Field(min_length=3)
     category: Category
     expected: Expected
