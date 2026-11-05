@@ -715,6 +715,14 @@ async def _run_lakehouse[I: BaseModel, O: BaseModel](
         return await anyio.to_thread.run_sync(call)
     except DomainError as exc:
         raise ToolError(str(exc)) from exc
+    except lakehouse_queries.DuplicateRestaurantError:
+        # Not an outage: the lakehouse maps two datasets to this id. Its own message, so the
+        # audit row tells the incident apart; nothing internal in it.
+        logger.exception("lakehouse id conflict in %s", getattr(fn, "__name__", fn))
+        raise ToolError(
+            "lakehouse data conflict: this restaurant id comes from more than one dataset, "
+            "so its numbers would be mixed; tell the owner the data is under review"
+        ) from None
     except Exception:
         # Driver errors carry the workspace host and fragments of the query: log, never hand
         # them to the model. The Postgres tools still answer, so say which one to use.

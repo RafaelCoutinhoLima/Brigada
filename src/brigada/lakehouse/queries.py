@@ -62,6 +62,11 @@ class GoldTables:
         return self._name("gold_delivery_hourly")
 
 
+class DuplicateRestaurantError(RuntimeError):
+    """One restaurant id in two datasets: answering would mix their orders. Raised so the
+    server can audit it apart from a warehouse outage."""
+
+
 @dataclass(frozen=True)
 class Coverage:
     data_source: str | None
@@ -108,7 +113,9 @@ def coverage(fetch: Fetch, tables: GoldTables, restaurant_id: int) -> Coverage:
     if len(rows) > 1:
         # Two sources mapped to one id: answering would mix their orders (and currencies).
         # Fail closed; _run_lakehouse logs it and the model gets the generic error.
-        raise RuntimeError(f"restaurant {restaurant_id} appears {len(rows)} times in gold")
+        raise DuplicateRestaurantError(
+            f"restaurant {restaurant_id} appears {len(rows)} times in gold"
+        )
     r = rows[0]
     return Coverage(r["source"], r["currency"], _as_date(r["data_from"]), _as_date(r["data_until"]))
 

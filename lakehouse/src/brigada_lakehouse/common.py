@@ -81,6 +81,7 @@ ORDER_ITEM_EXPECTATIONS = {
 }
 MENU_ITEM_EXPECTATIONS = {
     "id_present": "menu_item_id IS NOT NULL",
+    "name_present": "name IS NOT NULL",  # an unsafe name is NULL by now
     "restaurant_present": "restaurant_id IS NOT NULL",
 }
 

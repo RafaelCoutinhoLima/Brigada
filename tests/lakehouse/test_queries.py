@@ -289,6 +289,18 @@ async def test_driver_errors_never_reach_the_model() -> None:
     assert "sales_by_period" in str(info.value)
 
 
+async def test_a_duplicate_id_is_audited_apart_from_an_outage() -> None:
+    fetch = FakeWarehouse([_channel("app", 1.0, 1.0)], DAY, DAY)
+    fetch.coverage = fetch.coverage * 2
+    server = build_server(lakehouse=_lake(fetch))
+    tool = server._tool_manager.get_tool("sales_vs_baseline")
+    assert tool is not None
+    with pytest.raises(ToolError) as info:
+        await tool.fn(restaurant_id=1, start_date=DAY, end_date=DAY)
+    assert "data conflict" in str(info.value) and "unavailable" not in str(info.value)
+    assert "gold" not in str(info.value)  # nothing internal
+
+
 async def test_tool_returns_the_query_result() -> None:
     fetch = FakeWarehouse([_channel("app", 0.0, 1200.0)], DAY, DAY)
     server = build_server(lakehouse=_lake(fetch))

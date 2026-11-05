@@ -13,8 +13,10 @@ from brigada_lakehouse.common import (
     ORDER_COLUMNS,
     ORDER_ITEM_COLUMNS,
     RESTAURANT_COLUMNS,
+    clean_text,
     conform,
     latest_per_key,
+    safe_name,
     try_cast,
     utc_ntz_to_local,
     with_local_parts,
@@ -30,6 +32,18 @@ TABLES = ("restaurants", "menu_items", "orders", "order_items", "deliveries")
 
 # Synthetic ids stay below the real datasets' bands (Delivery Center starts at 1_000_001).
 MAX_RESTAURANT_ID = 999_999
+# The synthetic export is clean by construction, but it lands in the same writable Volume as
+# the real files: the same caps, so one bad row is dropped and counted, not a pipeline crash.
+MAX_ORDER_AMOUNT = 100_000
+MAX_ITEM_QTY = 1_000
+MAX_UNIT_PRICE = 10_000
+ORDER_EXPECTATIONS = {
+    "plausible_amount": f"total IS NOT NULL AND total <= {MAX_ORDER_AMOUNT}",
+}
+ORDER_ITEM_EXPECTATIONS = {
+    "plausible_qty": f"qty <= {MAX_ITEM_QTY}",
+    "plausible_price": f"unit_price <= {MAX_UNIT_PRICE}",
+}
 
 
 def _restaurant_id(column: str) -> Column:
@@ -37,12 +51,21 @@ def _restaurant_id(column: str) -> Column:
     return F.when(raw.between(1, MAX_RESTAURANT_ID), raw)
 
 
+def _channel() -> Column:
+    """One of CHANNELS, else NULL (dropped and counted by channel_present): an unknown channel
+    would pass and then vanish from the zero-filled gold, which only has these."""
+    raw = F.lower(F.trim("channel"))
+    return F.when(raw.isin(*CHANNELS), raw)
+
+
 def restaurants(bronze: DataFrame) -> DataFrame:
     df = bronze.select(
         _restaurant_id("id").alias("restaurant_id"),
         F.lit(SOURCE).alias("source"),
         F.trim("id").alias("source_id"),
-        F.trim("name").alias("name"),
+        F.coalesce(
+            safe_name(clean_text("name")), F.concat(F.lit("Restaurante "), F.trim("id"))
+        ).alias("name"),
         F.trim("cuisine").alias("segment"),
         F.trim("city").alias("city"),
         F.lit(None).cast("string").alias("state"),
@@ -58,7 +81,7 @@ def menu_items(bronze: DataFrame) -> DataFrame:
     df = bronze.select(
         _restaurant_id("restaurant_id").alias("restaurant_id"),
         try_cast("id", "bigint").alias("menu_item_id"),
-        F.trim("name").alias("name"),
+        safe_name(clean_text("name")).alias("name"),  # NULL: dropped by name_present
         F.trim("category").alias("category"),
         F.lower(F.trim("active")).isin("true", "t", "1").alias("active"),
         *_meta(bronze),
@@ -73,7 +96,7 @@ def orders(bronze: DataFrame, deliveries: DataFrame) -> DataFrame:
         F.trim("id").alias("order_id"),
         _restaurant_id("restaurant_id").alias("restaurant_id"),
         utc_ntz_to_local(utc, TIMEZONE).alias("created_at_local"),
-        F.lower(F.trim("channel")).alias("channel"),
+        _channel().alias("channel"),
         F.lit("completed").alias("status"),
         try_cast("total", "decimal(12,2)").alias("total"),
         *_meta(bronze),

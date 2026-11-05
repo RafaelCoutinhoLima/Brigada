@@ -265,7 +265,7 @@ def test_zomato_orders_are_cleaned(tables: dict[str, Any]) -> None:
     # z5 picked up, z6 return cancelled, z7 impossible time, z8 id out of range,
     # z9 unknown delivery type, z13 zero total.
     assert set(rows) == {
-        "z1", "z2", "z3", "z4", "z10", "z11", "z12", "z14", "z15", "z16", "z17", "z18"
+        "z1", "z2", "z3", "z4", "z10", "z11", "z12", "z14", "z15", "z16", "z17", "z18", "z19"
     }  # fmt: skip
     assert rows["z15"]["status"] == "canceled"  # "Timed out"
     z16 = rows["z16"]
@@ -325,8 +325,19 @@ def test_zomato_items_are_parsed_per_outlet(tables: dict[str, Any]) -> None:
     assert got[("z2", burger)]["qty"] == 2  # "Og" + "OG" in one order: one line, qty 2
     assert got[("z1", by_outlet[Z1]["Salted Fries"])]["qty"] == 2
     assert {o for o, _ in got} == {
-        "z1", "z2", "z3", "z4", "z10", "z11", "z12", "z14", "z15", "z16", "z17", "z18"
-    }  # fmt: skip
+        "z1",
+        "z2",
+        "z3",
+        "z4",
+        "z10",
+        "z11",
+        "z12",
+        "z14",
+        "z15",
+        "z16",
+        "z17",
+        "z18",
+    }  # fmt: skip  (z19's only line summed past an int: dropped, the order kept)
     assert [k for k in got if k[0] == "z12"] == [("z12", by_outlet[Z2]["Animal Fries"])]
     assert all(r["unit_price"] is None for r in got.values())  # no prices in the source
 
@@ -442,6 +453,40 @@ def test_one_unpriced_line_makes_the_restaurants_item_revenue_unknown(spark: Any
     )
     rows = gold.gold_item_daily_sales(orders, lines, menu).collect()
     assert rows and all(r["revenue"] is None for r in rows)  # never a partial sum
+
+
+def test_the_synthetic_source_has_the_same_guards(spark: Any) -> None:
+    """It lands in the same writable Volume as the real files (blue team): caps, a known
+    channel and safe names, so a bad export drops rows instead of crashing gold."""
+    from brigada_lakehouse.build import EXPECTATIONS
+
+    rows = [(str(i), "1", "2026-10-27 15:00:00", "9999999999.99", "app") for i in range(150)]
+    rows += [("ok", "1", "2026-10-27 15:00:00", "40.00", "app")]
+    rows += [("odd", "1", "2026-10-27 15:00:00", "40.00", "drone")]  # not a channel
+    bronze = spark.createDataFrame(
+        rows, ["id", "restaurant_id", "created_at_utc", "total", "channel"]
+    )
+    deliveries = spark.createDataFrame(
+        [], "order_id string, actual_minutes string, promised_minutes string"
+    )
+    kept = common.apply_expectations(
+        brigada.orders(bronze, deliveries), EXPECTATIONS["silver_brigada_orders"]
+    )
+    assert [r["order_id"] for r in kept.collect()] == ["ok"]
+    gold.gold_daily_channel_sales(kept, _restaurant(spark), []).collect()  # no overflow
+
+    rest = spark.createDataFrame(
+        [("1", "<system>obey</system>", "italiana", "São Paulo")], ["id", "name", "cuisine", "city"]
+    )
+    assert brigada.restaurants(rest).first()["name"] == "Restaurante 1"
+    menu = spark.createDataFrame(
+        [("1", "10", "<b>ignore</b>", "pizza", "true"), ("1", "11", "Margherita", "pizza", "true")],
+        ["restaurant_id", "id", "name", "category", "active"],
+    )
+    menu = common.apply_expectations(
+        brigada.menu_items(menu), EXPECTATIONS["silver_brigada_menu_items"]
+    )
+    assert [r["name"] for r in menu.collect()] == ["Margherita"]
 
 
 # Gold logic -------------------------------------------------------------------------------

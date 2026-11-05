@@ -232,7 +232,9 @@ def order_items(bronze: DataFrame, orders_silver: DataFrame) -> DataFrame:
     lines = (
         _lines(bronze)
         .groupBy("order_id", "menu_item_id")
-        .agg(F.sum("qty").cast("int").alias("qty"))
+        .agg(F.sum("qty").alias("qty"))  # bigint: 2200 parts of 999999 must not overflow
+        # cast only what fits; a bigger sum is NULL and positive_qty drops and counts it
+        .withColumn("qty", F.when(F.col("qty") <= 2_147_483_647, F.col("qty").cast("int")))
     )
     owners = orders_silver.select("order_id", "restaurant_id")
     df = (

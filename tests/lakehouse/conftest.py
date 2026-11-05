@@ -357,6 +357,9 @@ ZOMATO_ORDERS = [
      "Zomato Delivery", "60km", "1 x Masala Dosa", "120.00", ""),  # 60 km: implausible
     ("z17", "21467269", "<i>Sector 4</i>", "08:10 PM, September 12 2024", "Delivered",
      "Zomato Delivery", "2km", "1 x Chicken Roll", "130.00", ""),
+    # one cell that would overflow an int sum (2200 x 999999): the line drops, the run survives
+    ("z19", "21467269", "<i>Sector 4</i>", "08:20 PM, September 12 2024", "Delivered",
+     "Zomato Delivery", "2km", ", ".join(["999999 x Fries"] * 2200), "140.00", ""),
     # Gandhi Jayanti, a Delhi holiday, inside an outlet's history
     ("z18", "21309083", "Shahdara", "07:00 PM, October 2 2024", "Delivered",
      "Zomato Delivery", "4km", "1 x Animal Fries", "190.00", ""),

@@ -15,8 +15,11 @@ from brigada_lakehouse.sources import brigada, delivery_center, zomato
 # pipeline.py, so the two can never disagree (test_pipeline checks pipeline.py reads these).
 EXPECTATIONS: dict[str, dict[str, str]] = {
     "silver_brigada_menu_items": common.MENU_ITEM_EXPECTATIONS,
-    "silver_brigada_orders": common.ORDER_EXPECTATIONS,
-    "silver_brigada_order_items": common.ORDER_ITEM_EXPECTATIONS,
+    "silver_brigada_orders": {**common.ORDER_EXPECTATIONS, **brigada.ORDER_EXPECTATIONS},
+    "silver_brigada_order_items": {
+        **common.ORDER_ITEM_EXPECTATIONS,
+        **brigada.ORDER_ITEM_EXPECTATIONS,
+    },
     "silver_delivery_center_orders": {
         **common.ORDER_EXPECTATIONS,
         **delivery_center.ORDER_EXPECTATIONS,
