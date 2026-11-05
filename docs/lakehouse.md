@@ -229,7 +229,28 @@ sobre o silver, sem passar pelo gold nem pelas consultas das ferramentas
 (`evals/build_real_cases.py`, detalhes em `evals/README.md`). O agente responde lendo o
 lakehouse no Databricks: se os dois discordarem, é defeito em algum dos lados.
 
-1. Com o pipeline rodado (passo 5) e o `.env` preenchido (passo 6), cadastre os restaurantes
+1. Confira no **SQL Editor** que o Databricks construiu o mesmo que os testes locais. Se um
+   número não bater, o problema está no deploy, não no agente:
+
+```sql
+-- pedidos no silver: 321733 (delivery_center) e 21315 (zomato)
+SELECT source, count(*) FROM workspace.brigada.silver_orders GROUP BY source;
+-- moeda, fuso e país por fonte
+SELECT source, country, currency, timezone, count(*)
+FROM workspace.brigada.gold_restaurants GROUP BY ALL;
+-- linhas de feriado: 3798 (delivery_center) e 145 (zomato)
+SELECT source, count(*) FROM workspace.brigada.gold_daily_channel_sales
+WHERE is_holiday GROUP BY source;
+-- PAPA SUCIS: 02/04 é Sexta-feira da Paixão; a média de 30/04 soma ~8339,65
+SELECT day, holiday_name, sum(revenue), sum(baseline_revenue)
+FROM workspace.brigada.gold_daily_channel_sales
+WHERE restaurant_id = 1000053 AND day IN ('2021-04-02', '2021-04-30') GROUP BY ALL;
+-- IUMPICA: cozinha 24,84 min em média
+SELECT round(sum(prep_minutes_sum) / sum(prep_count), 2)
+FROM workspace.brigada.gold_delivery_hourly WHERE restaurant_id = 1000676;
+```
+
+2. Com o pipeline rodado (passo 5) e o `.env` preenchido (passo 6), cadastre os restaurantes
    reais no banco do eval (`brigada_eval`, com a migration 0010 aplicada):
 
 ```bash
@@ -237,7 +258,8 @@ DATABASE_URL=postgresql://brigada:brigada@localhost:55434/brigada_eval \
   uv run python scripts/register_lakehouse_restaurants.py --min-orders 100
 ```
 
-2. Gere os casos e confira o harness com o oracle (deve dar 100%):
+3. Gere os casos e confira o harness com o oracle (deve dar 100%). O build compara o gabarito
+   com o gold feito dos mesmos arquivos e para se divergirem:
 
 ```bash
 uv run python -m evals.build_real_cases --delivery-center ~/Downloads/delivery-center \
@@ -245,14 +267,19 @@ uv run python -m evals.build_real_cases --delivery-center ~/Downloads/delivery-c
 uv run python -m evals.run --cases evals/cases_real.jsonl --answerer evals.oracle:answer
 ```
 
-3. Rode ao vivo:
+4. Rode ao vivo:
 
 ```bash
 DATABASE_URL=postgresql://brigada:brigada@localhost:55434/brigada_eval TOOL_TIMEOUT_SECONDS=60 \
   uv run python -m evals.run --cases evals/cases_real.jsonl --concurrency 2
 ```
 
+5. Leia à mão as respostas que falharam nos casos "não existe" e no `real-dc-015` antes de
+   confiar na nota (limitações em `evals/README.md`), e veja à parte o subconjunto `derived`,
+   que mede também a conta do modelo.
+
 O arquivo `evals/cases_real.jsonl` não entra no git (dado de terceiros, com nomes reais).
+Depois de mudar o pipeline, rode o job com **full refresh**: o gold muda de formato.
 
 ### Pelo navegador, sem a CLI
 

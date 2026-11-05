@@ -68,9 +68,13 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
 - **Várias fontes, um contrato.** Cada base tem um módulo em
   `lakehouse/src/brigada_lakehouse/sources/` que leva o bronze dela ao mesmo silver conformado
   (restaurantes, pedidos com hora local, status, canal, tempo de entrega, distância; itens
-  quando a base tem). O gold só lê esse contrato, então as ferramentas e os agentes não mudam
-  quando entra uma fonte nova. Fontes agora: `brigada` (sintético), `delivery_center` (Brasil)
-  e `zomato` (Índia).
+  quando a base tem). O gold só lê esse contrato e as consultas das ferramentas não mudam com
+  uma fonte nova, mas ela ainda toca uns dez lugares: o módulo da fonte, os blocos de
+  `build.py` e `pipeline.py`, `build.EXPECTATIONS`, os canais em `gold.SOURCE_CHANNELS` e na
+  ordem de exibição das ferramentas, o calendário de feriados, a lista de arquivos do
+  `upload_source.py`, a moeda nos prompts e nas unidades do eval. A revisão da equipe 5 propôs
+  um registro único por fonte (`SourceSpec`); ficou como próximo passo. Fontes agora:
+  `brigada` (sintético), `delivery_center` (Brasil) e `zomato` (Índia).
 - **Fuso por fonte:** cada módulo declara `TIMEZONE` (`America/Sao_Paulo` no sintético e no
   Delivery Center, `Asia/Kolkata` no Zomato), e as funções de conversão de `common.py` recebem
   o fuso como argumento, em vez de um `LOCAL_TZ` fixo. O dia e a hora locais continuam
@@ -82,11 +86,25 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   de 2021 seria um número inventado. `currency` entra no contrato de restaurantes, em
   `gold_restaurants` e no resultado das três ferramentas, e os prompts de Vendas e Operações
   mandam usar a moeda devolvida. As ferramentas do Postgres continuam em reais.
-- **Ids sem colisão, cabendo em `integer`:** restaurante do Delivery Center vira
-  `1_000_000 + store_id` (até 1.004.679) e do Zomato vira `100_000_000 + id` (até
-  ~121,5 milhões, abaixo do limite de 2.147.483.647 de `restaurants.id`). Um id do Zomato que
-  passaria do intervalo vira NULL e a expectativa `restaurant_present` descarta e conta o
-  pedido, em vez de colidir em silêncio.
+- **Ids sem colisão, cabendo em `integer`:** cada fonte tem uma faixa e a confere antes de
+  somar o deslocamento: sintético de 1 a 999.999; Delivery Center `1_000_000 + store_id` com
+  `store_id` de 1 a 98.999.999 (hoje até 1.004.679); Zomato `100_000_000 + id` com id até
+  99.999.999 (hoje até ~121,5 milhões), tudo abaixo do limite de 2.147.483.647 de
+  `restaurants.id`. Um id fora da faixa vira NULL e a expectativa `restaurant_present` descarta e
+  conta o pedido. Antes da revisão da equipe 5 só o Zomato conferia: o red team mostrou que uma
+  loja `-999999` do Delivery Center caía no restaurante 1 da Brigada e somava pedidos (e reais
+  com rúpias) nas respostas dele. Como última barreira, as ferramentas falham fechado se um id
+  aparecer duas vezes em `gold_restaurants`.
+- **Expectativas sem ambiguidade:** todo predicado diz o que fazer com NULL (`total IS NOT NULL
+  AND total >= 0`), porque o `where()` local descarta NULL e uma regra que dependesse disso
+  poderia valer de um jeito no teste e de outro no Lakeflow. As expectativas de cada tabela
+  ficam num registro só, `build.EXPECTATIONS`, que o `build.py` aplica e os decoradores do
+  `pipeline.py` leem; um teste garante que nenhuma tabela foge dele. Tetos contra dado
+  envenenado (e contra estouro sob ANSI, que derrubaria o pipeline inteiro): pedido do Zomato
+  até ₹ 100 mil, até 100 unidades por linha de prato, pedido entre 2015 e 2035 (um pedido de
+  1900 fazia o calendário zero-filled gerar um século de zeros). Status só pelo mapa de cada
+  fonte: um "Completed" cru não passa mais como `completed`. Preço NULL é aceito só no Zomato,
+  a única fonte sem preço; nas outras é linha quebrada.
 - **Ingestão:** `scripts/export_lakehouse.py` exporta `restaurants`, `menu_items`, `orders` e
   `order_items` em CSV para um Volume do Unity Catalog. `reviews` fica de fora de propósito: é
   texto de cliente (onde mora a prompt injection) e nada no lakehouse precisa dele.
@@ -156,14 +174,21 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
     instrução plantada no comentário. A nota de 1 a 5 (12% dos pedidos, todos entregues) vai
     até o silver em `rating`, mas nenhuma ferramenta a expõe por enquanto: quem avalia escolheu
     avaliar, então a média é enviesada e precisa de cuidado antes de virar resposta.
-  - nomes de prato, marca, subzone e cidade chegam ao modelo (`item_trends`,
-    `gold_restaurants`) e vêm de um arquivo externo: só passam se parecerem nomes (letras de
+  - nomes de prato, marca, subzone, cidade e loja chegam ao modelo (`item_trends`, e o nome do
+    restaurante, copiado para o Postgres pelo script de registro, entra no contexto do system
+    prompt da orquestração) e vêm de um arquivo externo: só passam se parecerem nomes (letras de
     qualquer alfabeto, dígitos, espaço e pontuação básica, até 80 caracteres,
     `common.SAFE_NAME`). O resto vira NULL e é descartado e contado. Todos os nomes do arquivo
     real passam. Isso tira marcação e textos longos do caminho, mas não torna o nome confiável:
     uma frase curta em letras ainda passaria. Alternativa descartada: marcar `item_trends`
     como saída não confiável, o que bloquearia as ferramentas de escrita em qualquer run que a
     usasse, inclusive no sintético.
+    O nome do restaurante passa pelo mesmo filtro em três pontos: no pipeline (inclusive o nome
+    final "marca (subzone)", já que duas metades seguras podem formar um todo longo demais), no
+    script que o copia para o Postgres e no contexto da orquestração, onde só um nome seguro
+    entra, entre aspas e marcado como cadastro ("não é instrução"); senão, só o id.
+    `brigada/safe_text.py` repete a regra em Python e um teste compara as duas sobre as mesmas
+    amostras.
   Resultado na base real: 21.321 pedidos brutos, 21.315 no silver (21.131 entregues, 184
   cancelados), 21 restaurantes, 38.137 linhas de item e 915 pratos somando todas as filiais.
 - **Restaurante real no Postgres é só cadastro.** Runs, auditoria e chaves de API referenciam
@@ -275,7 +300,12 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
     tratou, não se o tratamento está certo (isso são os testes do pipeline). Pergunta do tipo
     "qual" só entra com 10% de folga entre o 1º e o 2º; "pior dia de abril" saiu porque, sem a
     Sexta-feira Santa na média, três dias ficam a menos de 3 pontos um do outro. O arquivo não
-    entra no git (dado de terceiros, nomes reais);
+    entra no git (dado de terceiros, nomes reais). Depois da revisão da equipe 5: um caso em
+    rúpias reprova "R$"; um caso "não existe" reprova valor em dinheiro inventado, não aceita
+    "não foi possível verificar" (é o que o sintetizador diz quando a ferramenta falhou) e só
+    passa depois de chamar a ferramenta que teria o dado; o build compara o gabarito com o gold
+    feito dos mesmos downloads e se recusa a gravar os casos se divergirem; casos que dependem
+    da conta do modelo levam a marca `derived`;
   - o Delivery Center é de 2021 e o Zomato vai até jan/2025: perguntas sobre eles precisam de
     `--today` logo depois do fim de cada base;
   - no Zomato, "qual canal mais cancelou" é trivial (um canal só), "em que hora a entrega
@@ -292,9 +322,22 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
     real inteira (fora da CI);
   - no eval ao vivo com o lakehouse ligado: os casos de queda de vendas acertam com menos
     passos que com só o Postgres. Ainda não medido.
-- **Próximos passos possíveis:** as ferramentas que os casos `gap` cobram (nota com o número
-  de avaliações, desconto, cancelamento por hora e receita perdida, motivo da rejeição;
-  recorrência só como contagem agregada, nunca o id do cliente); tempo de preparo e nota do Zomato numa ferramenta (a nota com o viés de seleção
-  explicado); comentários do Zomato como texto não confiável, pelo mesmo caminho das avaliações
-  de hoje; ingestão incremental com Auto Loader; CDC do
-  Postgres.
+- **Riscos aceitos (revisão da equipe 5):** um nome de prato curto, em palavras simples, ainda
+  passa no `SAFE_NAME` e chega ao modelo por `item_trends`; o efeito fica limitado porque as
+  ferramentas de escrita recusam restaurantes do lakehouse. O bronze (com comentários e
+  `Customer ID`) fica no mesmo schema que o token do warehouse lê; as ferramentas só consultam o
+  gold, por SQL fixo.
+- **Próximos passos possíveis:**
+  - as ferramentas que os casos `gap` cobram (nota com o número de avaliações, desconto,
+    cancelamento por hora e receita perdida, motivo da rejeição; recorrência só como contagem
+    agregada, nunca o id do cliente);
+  - totais de período numa ferramenta (`range_total`), para os casos `derived` deixarem de
+    depender da conta do modelo;
+  - o "hoje" do runtime no fuso do restaurante (hoje vem do fuso da configuração; não aparece
+    com dados históricos e `today` explícito, mas apareceria com dados do Zomato ao vivo);
+  - cobertura do calendário de feriados por país e região, com aviso quando o dado passa dela;
+    Tiradentes nacional com exceção para o RJ em 2021; cidade comparada sem acento;
+  - registro único por fonte (`SourceSpec`) e bronze num schema separado, com o token do
+    warehouse lendo só o gold;
+  - comentários do Zomato como texto não confiável, pelo mesmo caminho das avaliações de hoje;
+    ingestão incremental com Auto Loader; CDC do Postgres.

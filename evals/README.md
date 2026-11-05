@@ -205,8 +205,17 @@ uv run python -m evals.run --cases evals/cases_real.jsonl --subset gap
   April are three days within 3 points of each other once Good Friday leaves the baseline).
 - **Per-case `today`** (2021-05-01 or 2025-02-01): their data ends there.
 - **`no_data` cases** expect "this dataset does not record it" (`NO_DATA_MARKERS`), not a scope
-  refusal and never a zero: delivery promise, dish revenue and delivery time on Zomato, days
-  after the data ends.
+  refusal: delivery promise, dish revenue and delivery time on Zomato, days after the data
+  ends. The answer fails if it gives any money amount or a zero in words (hours and dates are
+  fine), if it says "não foi possível verificar" (what the synthesizer says when a tool failed),
+  or if the tool that would have the data was never called: an outage must not pass.
+- **Currency**: a rupee case needs a rupee marker (₹, INR, rúpias) and fails on "R$"; a reais
+  case fails on rupees.
+- **`derived` subset**: answers that need the model to add or divide tool rows (month totals,
+  rates, a week's revenue). They measure the arithmetic as much as the tools; read them apart.
+- **Checked against the gold**: before writing the cases the builder compares its formulas with
+  the gold built from the same downloads (every day's baseline, every delivery mean of the
+  restaurants the cases use) and stops if they disagree.
 - **`gap` subset**: questions the data answers but no tool exposes yet (rating, discounts,
   returning customers, rejection reasons, cancellations per hour, canceled revenue). Today the
   right answer is "not available"; when a tool lands, the case becomes a number.
@@ -223,6 +232,10 @@ eval database.
   "não é a cozinha" would pass too. Read its answers by hand until a scorer checks the claim.
 - `no_data` markers come from how the prompts phrase it; a live run may phrase it otherwise
   ("não tenho o motivo"). Read the failures of the first live run before trusting the score.
+- A `no_data` answer may still invent minutes or km (they are allowed because a right answer can
+  give the kitchen time or the distance the dataset does have).
+- A number case passes when any number in the answer is close: a list of guesses ("-5%, -12,5%
+  ou -20%") can pass. Same limit as the synthetic cases.
 
 - `number` accepts **any** number in the text, so an answer that lists many numbers can pass
   by accident. The LLM judge (still to come) is the check on explanation quality.
