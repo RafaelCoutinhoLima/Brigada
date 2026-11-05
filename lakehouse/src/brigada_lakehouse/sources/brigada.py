@@ -85,6 +85,8 @@ def orders(bronze: DataFrame, deliveries: DataFrame) -> DataFrame:
         .withColumn("distance_km", F.lit(None).cast("double"))
         .withColumn("rating", F.lit(None).cast("double"))  # reviews stay in Postgres
     )
+    for phase in ("prep_minutes", "pickup_minutes", "transit_minutes", "rider_wait_minutes"):
+        df = df.withColumn(phase, F.lit(None).cast("double"))  # only the total is generated
     return conform(df, ORDER_COLUMNS)
 
 

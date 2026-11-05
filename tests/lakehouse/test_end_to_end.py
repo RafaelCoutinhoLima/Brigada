@@ -112,6 +112,9 @@ def test_real_dataset_restaurant_through_the_same_tools(fetch: queries.Fetch) ->
         delivery.overall.mean_delivery_minutes == 42.5 and delivery.overall.mean_distance_km == 2.0
     )
     assert delivery.overall.late_share is None  # no promises in this dataset
+    assert delivery.overall.mean_prep_minutes == 20.0  # kitchen 20 + 5.5 + 17 = 42.5
+    assert delivery.overall.mean_pickup_minutes == 5.5
+    assert delivery.overall.mean_transit_minutes == 17.0
 
 
 def test_stale_end_date_is_flagged(fetch: queries.Fetch) -> None:
@@ -165,5 +168,7 @@ def test_zomato_restaurant_through_the_same_tools(fetch: queries.Fetch) -> None:
     assert delivery.overall is not None and delivery.overall.delivered_orders == 2
     assert delivery.overall.mean_delivery_minutes is None
     assert delivery.overall.mean_distance_km == 1.75
+    assert delivery.overall.mean_prep_minutes == 18.4  # z1 only: z2's ready mark was "Missed"
+    assert delivery.overall.mean_rider_wait_minutes == 7.3  # (11.6 + 3.0) / 2
     assert [g.key for g in delivery.groups] == ["0", "23"]  # calendar order
     assert "no delivery time" in (delivery.note or "") and delivery.currency == "INR"

@@ -155,7 +155,7 @@ def test_dc_restaurants_are_the_food_stores_with_clean_names(tables: dict[str, A
 def test_dc_orders_are_cleaned(tables: dict[str, Any]) -> None:
     rows = _rows(tables["silver_delivery_center_orders"], "order_id")
     # 3 absurd amount, 4 zero, 6 GOOD store, 7 impossible date, 8 unknown channel.
-    assert set(rows) == {"1", "2", "5", "9"}
+    assert set(rows) == {"1", "2", "5", "9", "10", "11"}
     first = rows["1"]
     assert first["created_at_local"] == datetime(2021, 1, 4, 21, 30)  # UTC -> UTC-3
     assert first["local_day"] == date(2021, 1, 4) and first["iso_weekday"] == 1
@@ -166,6 +166,18 @@ def test_dc_orders_are_cleaned(tables: dict[str, Any]) -> None:
     assert rows["5"]["delivery_minutes"] is None  # open for days: unknown, order kept
     assert rows["5"]["distance_km"] is None  # 7,251 km
     assert rows["9"]["distance_km"] is None  # only a cancelled delivery
+
+
+def test_dc_delivery_phases_add_up_or_are_unknown(tables: dict[str, Any]) -> None:
+    rows = _rows(tables["silver_delivery_center_orders"], "order_id")
+    first = rows["1"]
+    phases = (first["prep_minutes"], first["pickup_minutes"], first["transit_minutes"])
+    assert phases == (20.0, 5.5, 17.0) and sum(phases) == first["delivery_minutes"]
+    assert first["rider_wait_minutes"] is None  # a Zomato measure
+    for oid in ("5", "9", "10", "11"):  # bad cycle, sum off, negative, missing
+        r = rows[oid]
+        assert (r["prep_minutes"], r["pickup_minutes"], r["transit_minutes"]) == (None,) * 3
+    assert rows["9"]["delivery_minutes"] == 35.0  # the total survives a bad split
 
 
 def test_gold_channels_follow_the_source(tables: dict[str, Any]) -> None:
@@ -242,6 +254,11 @@ def test_zomato_orders_are_cleaned(tables: dict[str, Any]) -> None:
     assert rows["z3"]["status"] == "canceled" and rows["z4"]["status"] == "canceled"
     assert rows["z10"]["distance_km"] == 21.0
     assert rows["z11"]["distance_km"] is None and rows["z11"]["rating"] is None  # "", "9"
+    assert (z1["prep_minutes"], z1["rider_wait_minutes"]) == (18.35, 11.6)
+    assert z1["pickup_minutes"] is None and z1["transit_minutes"] is None
+    assert (z2["prep_minutes"], z2["rider_wait_minutes"]) == (None, 3.0)  # "Missed" mark
+    assert rows["z10"]["prep_minutes"] is None and rows["z11"]["prep_minutes"] is None
+    assert (rows["z12"]["prep_minutes"], rows["z12"]["rider_wait_minutes"]) == (30.5, None)
 
 
 def test_zomato_free_text_never_leaves_bronze(tables: dict[str, Any]) -> None:
@@ -307,6 +324,8 @@ def test_zomato_gold(tables: dict[str, Any]) -> None:
     assert sum(r["delivered_orders"] for r in hourly) == 2
     assert sum(r["timed_orders"] for r in hourly) == 0
     assert sum(r["distance_km_sum"] for r in hourly) == 3.5
+    assert sum(r["prep_count"] for r in hourly) == 1  # z1; z2's ready mark was "Missed"
+    assert sum(r["rider_wait_count"] for r in hourly) == 2
     rest = _rows(tables["gold_restaurants"], "restaurant_id")
     assert rest[Z1]["currency"] == "INR" and rest[Z1]["completed_orders"] == 2
 
@@ -461,13 +480,16 @@ def _silver_orders(spark: Any, rows: list[tuple]) -> Any:
         "order_id string, restaurant_id bigint, local_day date, local_hour int, status string, "
         "delivery_minutes double, distance_km double",
     )
-    return (
+    df = (
         df.withColumn("source", F.lit("x"))
         .withColumn("iso_weekday", common.iso_weekday(F.col("local_day")))
         .withColumn("channel", F.lit("c"))
         .withColumn("total", F.lit(10).cast("decimal(12,2)"))
         .withColumn("promised_minutes", F.lit(None).cast("double"))
     )
+    for phase in gold.PHASES:
+        df = df.withColumn(f"{phase}_minutes", F.lit(None).cast("double"))
+    return df
 
 
 def test_item_revenue_without_prices_is_null_not_zero(spark: Any) -> None:

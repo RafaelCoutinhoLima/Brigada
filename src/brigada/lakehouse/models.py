@@ -182,6 +182,23 @@ class DeliveryGroup(_Output):
         description="Share (0-1) of orders with a promise that arrived after it; null when none."
     )
     mean_distance_km: float | None = Field(description="null: the source has no distance.")
+    prep_orders: int = Field(default=0, description="How many have the kitchen time.")
+    mean_prep_minutes: float | None = Field(
+        default=None, description="Kitchen: order to food ready. null: the source has none."
+    )
+    mean_pickup_minutes: float | None = Field(
+        default=None,
+        description="Food ready until the courier leaves (the food waits for the courier). "
+        "null: the source has none.",
+    )
+    mean_transit_minutes: float | None = Field(
+        default=None, description="Courier leaving to the order closed. null: none."
+    )
+    mean_rider_wait_minutes: float | None = Field(
+        default=None,
+        description="The courier waiting at the counter for the food: high means the kitchen "
+        "is late for the courier. null: the source has none.",
+    )
 
 
 class DeliveryPerformanceResult(_Output):

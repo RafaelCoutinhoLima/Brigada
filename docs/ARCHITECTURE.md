@@ -82,7 +82,8 @@ gold_item_daily_sales(restaurant_id, day, menu_item_id, item_name, category, act
      revenue, orders)
 gold_delivery_hourly(restaurant_id, source, day, iso_weekday, hour, delivered_orders,
      timed_orders, delivery_minutes_sum, promised_minutes_sum, promised_count, late_orders,
-     distance_km_sum, distance_count)
+     distance_km_sum, distance_count, <phase>_minutes_sum, <phase>_count)
+     phase in prep (kitchen), pickup (food waits for courier), transit, rider_wait
 ```
 
 `restaurants.data_source` (`brigada` | `lakehouse`) marks real-dataset restaurants, registered

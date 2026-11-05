@@ -26,6 +26,8 @@ from brigada_lakehouse.sources import brigada, delivery_center, zomato
 BASELINE_WEEKS = 4
 # How far back the baseline may reach to find BASELINE_WEEKS normal (non-holiday) days.
 BASELINE_LOOKBACK_WEEKS = 8
+# Where the delivery time goes (``<phase>_minutes`` in the silver contract).
+PHASES = ("prep", "pickup", "transit", "rider_wait")
 SOURCE_CHANNELS: dict[str, tuple[str, ...]] = {
     brigada.SOURCE: brigada.CHANNELS,
     delivery_center.SOURCE: delivery_center.CHANNELS,
@@ -234,9 +236,11 @@ def gold_delivery_hourly(orders: DataFrame) -> DataFrame:
     """Per restaurant, local day and hour: completed orders known to be delivered (with a
     delivery time or a distance), how many of them have a delivery time, sums and counts of
     delivery minutes, promised minutes and distance (so any grouping can average them
-    correctly), and how many arrived after the promise. A source without delivery times
-    (Zomato) still shows its orders and distances, with ``timed_orders`` at 0; sources without
-    a promise or a distance leave those counts at 0."""
+    correctly), and how many arrived after the promise. The same sums and counts for each phase
+    of the time (``PHASES``: kitchen, food waiting for the courier, transit, courier waiting for
+    the food), so a slow hour can be blamed on the kitchen or on the delivery. A source without
+    delivery times (Zomato) still shows its orders and distances, with ``timed_orders`` at 0;
+    sources without a promise, a distance or a phase leave those counts at 0."""
     delivered = orders.where(
         "status = 'completed' AND (delivery_minutes IS NOT NULL OR distance_km IS NOT NULL)"
     )
@@ -260,6 +264,18 @@ def gold_delivery_hourly(orders: DataFrame) -> DataFrame:
             F.count(F.when(late, True)).cast("int").alias("late_orders"),
             F.sum("distance_km").alias("distance_km_sum"),
             F.count("distance_km").cast("int").alias("distance_count"),
+            *[
+                agg
+                for phase in PHASES
+                for agg in (
+                    F.sum(f"{phase}_minutes").alias(f"{phase}_minutes_sum"),
+                    F.count(f"{phase}_minutes").cast("int").alias(f"{phase}_count"),
+                )
+            ],
         )
-        .na.fill(0.0, ["delivery_minutes_sum", "promised_minutes_sum", "distance_km_sum"])
+        .na.fill(
+            0.0,
+            ["delivery_minutes_sum", "promised_minutes_sum", "distance_km_sum"]
+            + [f"{phase}_minutes_sum" for phase in PHASES],
+        )
     )

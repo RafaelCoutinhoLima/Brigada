@@ -43,6 +43,11 @@ ORDER_COLUMNS = (
     "promised_minutes",  # what the customer was promised; null when the source has none
     "distance_km",
     "rating",  # customer rating 1-5; null when not rated or the source has none
+    # Where the time goes (null when the source does not record it):
+    "prep_minutes",  # kitchen: order to food ready
+    "pickup_minutes",  # food ready to the courier leaving (the food waits for the courier)
+    "transit_minutes",  # courier leaving to the order closed
+    "rider_wait_minutes",  # the courier waiting at the counter for the food (Zomato)
 )
 ORDER_ITEM_COLUMNS = ("source", "order_id", "restaurant_id", "menu_item_id", "qty", "unit_price")
 MENU_ITEM_COLUMNS = ("restaurant_id", "menu_item_id", "name", "category", "active")

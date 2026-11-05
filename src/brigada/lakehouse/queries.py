@@ -337,6 +337,11 @@ def _delivery_group(key: str, r: Row) -> DeliveryGroup | None:
     timed_n = int(r["timed_orders"] or 0)
     promised_n = int(r["promised_count"] or 0)
     distance_n = int(r["distance_count"] or 0)
+
+    def phase(name: str) -> float | None:
+        count = int(r[f"{name}_count"] or 0)
+        return round(float(r[f"{name}_minutes_sum"]) / count, 1) if count else None
+
     return DeliveryGroup(
         key=key,
         delivered_orders=n,
@@ -351,6 +356,11 @@ def _delivery_group(key: str, r: Row) -> DeliveryGroup | None:
         mean_distance_km=(
             round(float(r["distance_km_sum"]) / distance_n, 2) if distance_n else None
         ),
+        prep_orders=int(r["prep_count"] or 0),
+        mean_prep_minutes=phase("prep"),
+        mean_pickup_minutes=phase("pickup"),
+        mean_transit_minutes=phase("transit"),
+        mean_rider_wait_minutes=phase("rider_wait"),
     )
 
 
@@ -363,6 +373,11 @@ _SUMS = (
     "late_orders",
     "distance_km_sum",
     "distance_count",
+    *(
+        f"{p}_{kind}"
+        for p in ("prep", "pickup", "transit", "rider_wait")
+        for kind in ("minutes_sum", "count")
+    ),
 )
 
 
@@ -410,6 +425,11 @@ def delivery_performance(
             f"This restaurant's dataset ({cov.data_source}) records no delivery time: "
             "mean_delivery_minutes is unknown (null, not zero). Say so instead of estimating."
         )
+        if overall.mean_prep_minutes is not None:
+            untimed += (
+                " It does record the kitchen time (mean_prep_minutes) and how long the courier "
+                "waited for the food (mean_rider_wait_minutes)."
+            )
         note = untimed if note is None else f"{note} {untimed}"
     return DeliveryPerformanceResult(
         restaurant_id=inp.restaurant_id,

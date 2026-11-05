@@ -316,8 +316,16 @@ def _hourly(
     km: float,
     km_n: int,
     timed: int | None = None,
+    phases: dict[str, tuple[float, int]] | None = None,
 ) -> dict:
+    """phases: name -> (minutes sum, count); absent phases have none."""
+    phase_cols = {}
+    for name in ("prep", "pickup", "transit", "rider_wait"):
+        total, count = (phases or {}).get(name, (0.0, 0))
+        phase_cols[f"{name}_minutes_sum"] = total
+        phase_cols[f"{name}_count"] = count
     return {
+        **phase_cols,
         "k": k,
         "delivered_orders": n,
         "timed_orders": n if timed is None else timed,
@@ -387,3 +395,42 @@ def test_delivery_performance_without_delivery_times_says_unknown() -> None:
     assert result.overall.mean_distance_km == 2.5
     assert result.groups[0].mean_delivery_minutes is None
     assert result.note is not None and "no delivery time" in result.note
+
+
+def test_delivery_performance_splits_the_time_into_phases() -> None:
+    # Delivery Center shape: kitchen, food waiting for the courier, transit (they add up).
+    phases = {"prep": (500.0, 20), "pickup": (100.0, 20), "transit": (300.0, 20)}
+    rows = [
+        _hourly("20", 20, 900.0, 0.0, 0, 0, 30.0, 20, phases=phases),
+        _hourly("12", 10, 300.0, 0.0, 0, 0, 15.0, 10),  # no phase recorded at noon
+    ]
+    fetch = FakeWarehouse(rows, date(2021, 1, 1), date(2021, 4, 30), source="delivery_center")
+    inp = DeliveryPerformanceInput(
+        restaurant_id=1_000_676,
+        start_date=date(2021, 4, 1),
+        end_date=date(2021, 4, 30),
+        group_by="hour",
+    )
+    result = queries.delivery_performance(fetch, inp, TABLES)
+    noon, night = result.groups
+    assert night.mean_prep_minutes == 25.0 and night.mean_pickup_minutes == 5.0
+    assert night.mean_transit_minutes == 15.0 and night.prep_orders == 20
+    assert night.mean_rider_wait_minutes is None  # this source does not record it
+    assert noon.mean_prep_minutes is None and noon.prep_orders == 0  # unknown, not 0
+    assert result.overall is not None and result.overall.mean_prep_minutes == 25.0
+
+
+def test_zomato_has_kitchen_time_without_delivery_time() -> None:
+    phases = {"prep": (180.0, 10), "rider_wait": (80.0, 10)}
+    rows = [_hourly("all", 10, 0.0, 0.0, 0, 0, 40.0, 10, timed=0, phases=phases)]
+    fetch = FakeWarehouse(
+        rows, date(2024, 9, 1), date(2025, 1, 31), source="zomato", currency="INR"
+    )
+    inp = DeliveryPerformanceInput(
+        restaurant_id=120_635_699, start_date=date(2025, 1, 1), end_date=date(2025, 1, 31)
+    )
+    result = queries.delivery_performance(fetch, inp, TABLES)
+    assert result.overall is not None and result.overall.mean_delivery_minutes is None
+    assert result.overall.mean_prep_minutes == 18.0
+    assert result.overall.mean_rider_wait_minutes == 8.0
+    assert result.note is not None and "kitchen time" in result.note

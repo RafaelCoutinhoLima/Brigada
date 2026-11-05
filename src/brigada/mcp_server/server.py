@@ -779,8 +779,10 @@ def _register_lakehouse(server: BrigadaMCPServer, lake: Lakehouse) -> None:
         """Delivery time per local day, weekday, hour or weekday+hour: mean minutes from order
         to delivery (when the restaurant's dataset records it), mean promised minutes and share
         delivered late (when it has promises), mean distance in km (when it has distances).
-        Works for every restaurant in the lakehouse, including the real datasets. Check
-        data_until and note.
+        Also where the time goes, when the dataset records it: kitchen (mean_prep_minutes),
+        food waiting for the courier (mean_pickup_minutes), transit, and the courier waiting
+        for the food (mean_rider_wait_minutes). Use them to tell a slow kitchen from a slow
+        delivery. Works for every restaurant in the lakehouse. Check data_until and note.
         """
         inp = _validate(
             DeliveryPerformanceInput,

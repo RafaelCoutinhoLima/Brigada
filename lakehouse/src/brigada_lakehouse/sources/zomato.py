@@ -30,7 +30,11 @@ What the profiling of the raw file found, and what this module does about it:
 - ``Distance`` comes in whole-km bands ("3km") and "<1km", which becomes 0.5 km: a band, not
   missing data, and never 0.
 - There is **no delivery time** (``KPT duration`` is kitchen preparation, ``Rider wait time`` is
-  the wait at the counter): ``delivery_minutes`` is NULL.
+  the wait at the counter): ``delivery_minutes`` is NULL. Both are kept for what they are:
+  ``prep_minutes`` = KPT, except when the order's ready mark was "Missed" (KPT is then the
+  click time, ~0.6 min) or out of (0, ``MAX_PHASE_MINUTES``]; ``rider_wait_minutes`` = the
+  courier waiting for the food, a kitchen delay, so it is not ``pickup_minutes`` (the food
+  waiting for the courier, Delivery Center).
 - ``Total`` = subtotal + packaging - discounts (checked on every row): it is the order's
   revenue. No zero and no absurd value in the file, but ``total > 0`` is still an expectation.
 - ``Rating`` (1-5, 12% of orders) is kept. ``Review``, ``Instructions`` and complaint tags are
@@ -72,6 +76,7 @@ TABLES = ("orders",)
 FILE_NAMES = {"orders": "order_history_kaggle_data"}
 TIMESTAMP_FORMAT = "hh:mm a, MMMM d yyyy"
 MAX_DISTANCE_KM = 50
+MAX_PHASE_MINUTES = 120
 
 ORDER_EXPECTATIONS = {
     "positive_total": "total > 0",
@@ -144,6 +149,10 @@ def orders(bronze: DataFrame) -> DataFrame:
     raw_status = F.upper(F.trim("order_status"))
     channel_map = F.create_map(*[F.lit(x) for kv in _CHANNELS.items() for x in kv])
     rating = try_cast("rating", "double")
+    kpt = try_cast("kpt_duration_minutes", "double")
+    rider_wait = try_cast("rider_wait_time_minutes", "double")
+    missed = F.upper(F.trim("order_ready_marked")) == "MISSED"
+    plausible = lambda x: (x > 0) & (x <= MAX_PHASE_MINUTES)  # noqa: E731
     df = bronze.select(
         F.trim("order_id").alias("order_id"),
         _restaurant_id().alias("restaurant_id"),
@@ -153,6 +162,8 @@ def orders(bronze: DataFrame) -> DataFrame:
         try_cast("total", "decimal(12,2)").alias("total"),
         _distance_km("distance").alias("distance_km"),
         F.when(rating.between(1, 5), rating).alias("rating"),
+        F.when(plausible(kpt) & ~F.coalesce(missed, F.lit(False)), kpt).alias("prep_minutes"),
+        F.when(plausible(rider_wait), rider_wait).alias("rider_wait_minutes"),
         *_meta(bronze),
     )
     df = (
@@ -161,6 +172,8 @@ def orders(bronze: DataFrame) -> DataFrame:
         .withColumn("source", F.lit(SOURCE))
         .withColumn("delivery_minutes", F.lit(None).cast("double"))
         .withColumn("promised_minutes", F.lit(None).cast("double"))
+        .withColumn("pickup_minutes", F.lit(None).cast("double"))
+        .withColumn("transit_minutes", F.lit(None).cast("double"))
     )
     return conform(with_local_parts(df), ORDER_COLUMNS)
 

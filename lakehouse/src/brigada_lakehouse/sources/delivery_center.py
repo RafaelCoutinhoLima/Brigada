@@ -22,6 +22,13 @@ What the profiling of the raw files found, and what this module does about it:
   first DELIVERED row (lowest ``delivery_id``) is the order's, and only (0, ``MAX_DISTANCE_M``]
   is kept.
 - ``order_status`` FINISHED / CANCELED map to completed / canceled.
+- The cycle time splits into three phases that add up to it (checked against the order moments
+  on the raw file): ``order_metric_production_time`` (created to ready: the kitchen),
+  ``order_metric_expediton_speed_time`` (ready to the courier leaving: the food waits) and
+  ``order_metric_transit_time`` (leaving to finished). They are kept only all together, when
+  the cycle time is kept, none is negative and they add up to it within ``PHASE_TOLERANCE``
+  (rounding): 96% of the valid orders. Otherwise all three are NULL, so a split never
+  contradicts the total.
 """
 
 from pyspark.sql import DataFrame, Window
@@ -52,6 +59,7 @@ TIMESTAMP_FORMAT = "M/d/yyyy h:mm:ss a"
 MAX_ORDER_AMOUNT = 5000
 MAX_DELIVERY_MINUTES = 240
 MAX_DISTANCE_M = 30_000
+PHASE_TOLERANCE = 0.05  # minutes; the raw phases are rounded to 2 decimals
 
 ORDER_EXPECTATIONS = {
     "plausible_amount": f"total > 0 AND total <= {MAX_ORDER_AMOUNT}",
@@ -130,6 +138,17 @@ def orders(
     status_map = F.create_map(*[F.lit(x) for kv in _STATUSES.items() for x in kv])
     raw_status = F.upper(F.trim("order_status"))
     cycle = try_cast("order_metric_cycle_time", "double")
+    prep = try_cast("order_metric_production_time", "double")
+    pickup = try_cast("order_metric_expediton_speed_time", "double")
+    transit = try_cast("order_metric_transit_time", "double")
+    valid_cycle = (cycle > 0) & (cycle <= MAX_DELIVERY_MINUTES)
+    phases_ok = (
+        valid_cycle
+        & (prep >= 0)
+        & (pickup >= 0)
+        & (transit >= 0)  # also false when any is NULL
+        & (F.abs(cycle - (prep + pickup + transit)) <= PHASE_TOLERANCE)
+    )
     df = bronze.select(
         F.trim("order_id").alias("order_id"),
         (try_cast("store_id", "bigint") + RESTAURANT_ID_OFFSET).alias("restaurant_id"),
@@ -139,7 +158,10 @@ def orders(
         ),
         F.coalesce(status_map[raw_status], F.lower(raw_status)).alias("status"),
         try_cast("order_amount", "decimal(12,2)").alias("total"),
-        F.when((cycle > 0) & (cycle <= MAX_DELIVERY_MINUTES), cycle).alias("delivery_minutes"),
+        F.when(valid_cycle, cycle).alias("delivery_minutes"),
+        F.when(phases_ok, prep).alias("prep_minutes"),
+        F.when(phases_ok, pickup).alias("pickup_minutes"),
+        F.when(phases_ok, transit).alias("transit_minutes"),
         *_meta(bronze),
     )
     df = latest_per_key(df, ["order_id"]).drop(*_meta_names())
@@ -151,6 +173,7 @@ def orders(
         .withColumn("source", F.lit(SOURCE))
         .withColumn("promised_minutes", F.lit(None).cast("double"))
         .withColumn("rating", F.lit(None).cast("double"))  # the dataset has no reviews
+        .withColumn("rider_wait_minutes", F.lit(None).cast("double"))
     )
     return conform(with_local_parts(df), ORDER_COLUMNS)
 

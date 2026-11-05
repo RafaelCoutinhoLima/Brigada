@@ -219,6 +219,27 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
     então 23/04 entra na média como dia normal, apesar de as vendas terem caído 39% nesse dia.
     Alternativa descartada: marcar dias atípicos pelo próprio dado (detecção de anomalia), que
     esconderia justamente as quedas que o dono quer ver.
+- **Onde o tempo de entrega vai: cozinha ou entrega.** O tempo total sozinho fazia o dono culpar
+  o entregador: no IUMPICA (São Paulo), a sexta às 20h leva 61,7 min, e é a cozinha que sobe
+  (de 24,8 para 34,9 min), não o trânsito (16,4 para 17,5). O contrato ganhou quatro fases,
+  todas NULL quando a fonte não registra:
+  - `prep_minutes`: cozinha, do pedido até ficar pronto. No Delivery Center vem de
+    `order_metric_production_time`; no Zomato, do KPT, exceto quando a marcação de pronto foi
+    "Missed" (aí o KPT é só a hora do clique, média de 0,6 min) ou fora de (0, 120];
+  - `pickup_minutes`: de pronto até o entregador sair, a comida esperando o entregador (DC,
+    `order_metric_expediton_speed_time`);
+  - `transit_minutes`: da saída até o pedido fechar (DC);
+  - `rider_wait_minutes`: o entregador esperando a comida no balcão (Zomato). Fica separado de
+    `pickup_minutes` de propósito: os dois são "espera no balcão", mas apontam culpados opostos.
+  No DC as três fases somam o tempo total (conferido contra os horários brutos); só são
+  guardadas juntas, quando o total é válido, nenhuma é negativa e a soma bate com o total em
+  até 0,05 min (arredondamento). Isso mantém 96% dos pedidos válidos; nos outros as três ficam
+  NULL e o total continua, então a divisão nunca contradiz o total. O
+  `gold_delivery_hourly` soma e conta cada fase e o `delivery_performance` devolve as médias
+  (`mean_prep_minutes`, `mean_pickup_minutes`, `mean_transit_minutes`,
+  `mean_rider_wait_minutes`); o prompt de Operações manda apontar a fase que cresce no horário
+  lento e ignorar horários com menos de 20 pedidos (o agente achou "9h com 1 pedido de 0,6 min"
+  como hora mais rápida).
 - **Dado que a fonte não tem é NULL e vem explicado:** sem itens, `item_trends` diz que a base
   não tem linhas de pedido; sem preço, devolve receita nula, ordena por quantidade e diz por
   quê; sem tempo de entrega, `delivery_performance` devolve `mean_delivery_minutes` nulo e
@@ -249,8 +270,7 @@ e o modelo só o enxerga por duas ferramentas de leitura com SQL fixo.
   - no Zomato, "qual canal mais cancelou" é trivial (um canal só), "em que hora a entrega
     demora mais" não tem resposta (sem tempo de entrega) e "qual prato faturou mais" só tem
     resposta em quantidade;
-  - o tempo de preparo (`KPT`) e a nota existem no Zomato, mas ainda não chegam às
-    ferramentas.
+  - a nota do Zomato existe no silver, mas ainda não chega às ferramentas.
 - **Como sei que deu certo:**
   - testes locais com Spark (`tests/lakehouse`, job `lakehouse` da CI): o seed e recortes do
     Delivery Center e do Zomato, escritos à mão com os defeitos reais, passam pelo upload, pelo pipeline e pelas consultas
