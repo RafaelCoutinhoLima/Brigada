@@ -56,20 +56,28 @@ ORDER_STATUSES = ("completed", "canceled")
 
 # Rules every source's orders must pass (name -> SQL predicate). The pipeline drops failing rows
 # and counts them in the event log (``dlt.expect_all_or_drop``); the tests apply the same ones.
+# Every predicate says what to do with NULL: Spark's where() drops a NULL result, and a rule
+# that relied on that would behave differently wherever NULL passes.
 ORDER_EXPECTATIONS = {
     "id_present": "order_id IS NOT NULL",
     "restaurant_present": "restaurant_id IS NOT NULL",
     "created_at_parsed": "created_at_local IS NOT NULL",
+    # a year-1900 order would make the zero-filled calendar span a century of invented zeros
+    "plausible_date": (
+        "created_at_local >= timestamp_ntz'2015-01-01 00:00:00' "
+        "AND created_at_local < timestamp_ntz'2036-01-01 00:00:00'"
+    ),
     "channel_present": "channel IS NOT NULL",
-    "known_status": "status IN ('completed', 'canceled')",
-    "non_negative_total": "total >= 0",
+    "known_status": "status IS NOT NULL AND status IN ('completed', 'canceled')",
+    "non_negative_total": "total IS NOT NULL AND total >= 0",
 }
 ORDER_ITEM_EXPECTATIONS = {
     "order_present": "order_id IS NOT NULL",
     "item_present": "menu_item_id IS NOT NULL",
-    "positive_qty": "qty > 0",
-    # NULL price: the source does not record it (Zomato). Revenue per item is then unknown, not 0.
-    "non_negative_price": "unit_price IS NULL OR unit_price >= 0",
+    "positive_qty": "qty IS NOT NULL AND qty > 0",
+    # A source without item prices (Zomato) overrides this one; anywhere else a missing price
+    # is a broken row, never "this dataset has no prices".
+    "non_negative_price": "unit_price IS NOT NULL AND unit_price >= 0",
 }
 MENU_ITEM_EXPECTATIONS = {
     "id_present": "menu_item_id IS NOT NULL",

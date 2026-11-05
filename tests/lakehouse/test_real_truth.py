@@ -74,13 +74,17 @@ def test_delivery_means_match_gold(tables: dict[str, Any], silver: Silver) -> No
         for column, total, count in (
             ("delivery_minutes", "delivery_minutes_sum", "timed_orders"),
             ("prep_minutes", "prep_minutes_sum", "prep_count"),
+            ("pickup_minutes", "pickup_minutes_sum", "pickup_count"),
+            ("transit_minutes", "transit_minutes_sum", "transit_count"),
             ("rider_wait_minutes", "rider_wait_minutes_sum", "rider_wait_count"),
             ("distance_km", "distance_km_sum", "distance_count"),
         ):
             mine = real_truth.mean_of(d, column)
             n = x[count].sum()
             theirs = None if n == 0 else round(float(x[total].sum()) / n, 2)
-            assert mine == theirs, (rid, column)
+            assert (mine is None) == (theirs is None), (rid, column)
+            if mine is not None:  # both round to cents: float sums may land a cent apart
+                assert abs(mine - theirs) <= 0.011, (rid, column, mine, theirs)
 
 
 def test_item_quantities_match_gold(tables: dict[str, Any], silver: Silver) -> None:

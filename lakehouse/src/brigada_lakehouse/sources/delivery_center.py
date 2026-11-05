@@ -31,7 +31,7 @@ What the profiling of the raw files found, and what this module does about it:
   contradicts the total.
 """
 
-from pyspark.sql import DataFrame, Window
+from pyspark.sql import Column, DataFrame, Window
 from pyspark.sql import functions as F
 
 from brigada_lakehouse.common import (
@@ -40,6 +40,7 @@ from brigada_lakehouse.common import (
     clean_text,
     conform,
     latest_per_key,
+    safe_name,
     try_cast,
     utc_text_to_local,
     with_local_parts,
@@ -57,6 +58,8 @@ ENCODINGS = {"stores": "ISO-8859-1", "hubs": "ISO-8859-1"}
 TIMESTAMP_FORMAT = "M/d/yyyy h:mm:ss a"
 
 MAX_ORDER_AMOUNT = 5000
+# store_id range that keeps 1_000_000 + store_id inside this source's band (below Zomato's).
+MAX_STORE_ID = 98_999_999
 MAX_DELIVERY_MINUTES = 240
 MAX_DISTANCE_M = 30_000
 PHASE_TOLERANCE = 0.05  # minutes; the raw phases are rounded to 2 decimals
@@ -68,22 +71,29 @@ _CHANNEL_TYPES = {"MARKETPLACE": "marketplace", "OWN CHANNEL": "canal_proprio"}
 _STATUSES = {"FINISHED": "completed", "CANCELED": "canceled"}
 
 
+def _store_id() -> Column:
+    """store_id inside (0, MAX_STORE_ID], else NULL: a negative or huge id would land on another
+    source's restaurant (store -999999 + 1_000_000 = Brigada's restaurant 1) or overflow."""
+    raw = try_cast("store_id", "bigint")
+    return F.when(raw.between(1, MAX_STORE_ID), raw)
+
+
 def restaurants(stores: DataFrame, hubs: DataFrame) -> DataFrame:
     """FOOD stores, with the city and state of their hub."""
     hub = latest_per_key(
         hubs.select(
             try_cast("hub_id", "int").alias("hub_id"),
-            F.initcap(clean_text("hub_city")).alias("city"),
-            F.upper(clean_text("hub_state")).alias("state"),
+            safe_name(F.initcap(clean_text("hub_city"))).alias("city"),
+            safe_name(F.upper(clean_text("hub_state"))).alias("state"),
             *_meta(hubs),
         ),
         ["hub_id"],
     ).drop(*_meta_names())
     store = latest_per_key(
         stores.select(
-            try_cast("store_id", "bigint").alias("store_id"),
+            _store_id().alias("store_id"),
             try_cast("hub_id", "int").alias("hub_id"),
-            clean_text("store_name").alias("name"),
+            safe_name(clean_text("store_name")).alias("name"),
             F.upper(F.trim("store_segment")).alias("store_segment"),
             *_meta(stores),
         ).where("store_id IS NOT NULL"),
@@ -151,12 +161,12 @@ def orders(
     )
     df = bronze.select(
         F.trim("order_id").alias("order_id"),
-        (try_cast("store_id", "bigint") + RESTAURANT_ID_OFFSET).alias("restaurant_id"),
+        (_store_id() + RESTAURANT_ID_OFFSET).alias("restaurant_id"),
         try_cast("channel_id", "int").alias("channel_id"),
         utc_text_to_local("order_moment_created", TIMESTAMP_FORMAT, TIMEZONE).alias(
             "created_at_local"
         ),
-        F.coalesce(status_map[raw_status], F.lower(raw_status)).alias("status"),
+        status_map[raw_status].alias("status"),  # anything else: dropped by known_status
         try_cast("order_amount", "decimal(12,2)").alias("total"),
         F.when(valid_cycle, cycle).alias("delivery_minutes"),
         F.when(phases_ok, prep).alias("prep_minutes"),

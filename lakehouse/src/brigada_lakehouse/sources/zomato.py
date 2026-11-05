@@ -62,6 +62,9 @@ from brigada_lakehouse.common import (
     try_cast,
     with_local_parts,
 )
+from brigada_lakehouse.common import (
+    ORDER_ITEM_EXPECTATIONS as COMMON_ORDER_ITEM_EXPECTATIONS,
+)
 
 SOURCE = "zomato"
 COUNTRY = "IN"
@@ -77,9 +80,18 @@ FILE_NAMES = {"orders": "order_history_kaggle_data"}
 TIMESTAMP_FORMAT = "hh:mm a, MMMM d yyyy"
 MAX_DISTANCE_KM = 50
 MAX_PHASE_MINUTES = 120
+MAX_ORDER_AMOUNT = 100_000
+MAX_ITEM_QTY = 100  # per dish line; the real file peaks at 26
 
 ORDER_EXPECTATIONS = {
-    "positive_total": "total > 0",
+    # the largest real order is ₹12,663 (20 pizzas); ₹1 lakh leaves room and stops poison
+    "plausible_amount": f"total IS NOT NULL AND total > 0 AND total <= {MAX_ORDER_AMOUNT}",
+}
+# The only source without item prices: a NULL price means "not recorded", not a broken row.
+ORDER_ITEM_EXPECTATIONS = {
+    **COMMON_ORDER_ITEM_EXPECTATIONS,
+    "non_negative_price": "unit_price IS NULL OR unit_price >= 0",
+    "plausible_qty": f"qty <= {MAX_ITEM_QTY}",
 }
 _STATUSES = {
     "DELIVERED": "completed",
@@ -124,7 +136,8 @@ def restaurants(bronze: DataFrame) -> DataFrame:
         "restaurant_id",
         F.lit(SOURCE).alias("source"),
         "source_id",
-        F.coalesce(name, F.concat(F.lit("Zomato "), F.col("source_id"))).alias("name"),
+        # the joined name is checked again: two safe halves can make an unsafe whole (> 80)
+        F.coalesce(safe_name(name), F.concat(F.lit("Zomato "), F.col("source_id"))).alias("name"),
         F.lit("food").alias("segment"),
         "city",
         F.lit(None).cast("string").alias("state"),
@@ -158,7 +171,7 @@ def orders(bronze: DataFrame) -> DataFrame:
         _restaurant_id().alias("restaurant_id"),
         text_to_wall_clock("order_placed_at", TIMESTAMP_FORMAT).alias("created_at_local"),
         channel_map[F.upper(F.trim("delivery"))].alias("channel"),
-        F.coalesce(status_map[raw_status], F.lower(raw_status)).alias("status"),
+        status_map[raw_status].alias("status"),  # anything else: dropped by known_status
         try_cast("total", "decimal(12,2)").alias("total"),
         _distance_km("distance").alias("distance_km"),
         F.when(rating.between(1, 5), rating).alias("rating"),
@@ -210,7 +223,7 @@ def _lines(bronze: DataFrame) -> DataFrame:
         item_id.alias("menu_item_id"),
         name.alias("name"),
         # 1 to 6 digits: the cast cannot overflow, so it cannot fail under ANSI.
-        F.when(qty.rlike(r"^\d{1,6}$"), qty.cast("int")).alias("qty"),
+        F.when(qty.rlike(r"^\d{1,6}$"), qty.cast("int")).alias("qty"),  # capped by expectation
     )
 
 
@@ -233,7 +246,8 @@ def order_items(bronze: DataFrame, orders_silver: DataFrame) -> DataFrame:
 def menu_items(bronze: DataFrame) -> DataFrame:
     """Every dish ever ordered, per outlet, under its most frequent spelling. The source has no
     menu: category and whether it is still on sale are unknown (NULL)."""
-    lines = _lines(bronze).where("menu_item_id IS NOT NULL")
+    # only lines that pass as order lines: a dish seen only in a dropped line is not a dish
+    lines = _lines(bronze).where(f"menu_item_id IS NOT NULL AND qty BETWEEN 1 AND {MAX_ITEM_QTY}")
     names = _most_frequent(lines, "menu_item_id", "name")
     ids = lines.select("restaurant_id", "menu_item_id").distinct()
     df = ids.join(names, "menu_item_id").select(

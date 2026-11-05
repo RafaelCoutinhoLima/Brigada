@@ -5,7 +5,7 @@ is a UTC wall clock without offset. Restaurant ids are kept as they are (1, 2, 3
 same ids the Postgres tools use.
 """
 
-from pyspark.sql import DataFrame
+from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
 from brigada_lakehouse.common import (
@@ -28,9 +28,18 @@ CHANNELS = ("app", "telefone", "balcao")
 TABLES = ("restaurants", "menu_items", "orders", "order_items", "deliveries")
 
 
+# Synthetic ids stay below the real datasets' bands (Delivery Center starts at 1_000_001).
+MAX_RESTAURANT_ID = 999_999
+
+
+def _restaurant_id(column: str) -> Column:
+    raw = try_cast(column, "bigint")
+    return F.when(raw.between(1, MAX_RESTAURANT_ID), raw)
+
+
 def restaurants(bronze: DataFrame) -> DataFrame:
     df = bronze.select(
-        try_cast("id", "bigint").alias("restaurant_id"),
+        _restaurant_id("id").alias("restaurant_id"),
         F.lit(SOURCE).alias("source"),
         F.trim("id").alias("source_id"),
         F.trim("name").alias("name"),
@@ -47,7 +56,7 @@ def restaurants(bronze: DataFrame) -> DataFrame:
 
 def menu_items(bronze: DataFrame) -> DataFrame:
     df = bronze.select(
-        try_cast("restaurant_id", "bigint").alias("restaurant_id"),
+        _restaurant_id("restaurant_id").alias("restaurant_id"),
         try_cast("id", "bigint").alias("menu_item_id"),
         F.trim("name").alias("name"),
         F.trim("category").alias("category"),
@@ -62,7 +71,7 @@ def orders(bronze: DataFrame, deliveries: DataFrame) -> DataFrame:
     utc = try_cast("created_at_utc", "timestamp_ntz")
     df = bronze.select(
         F.trim("id").alias("order_id"),
-        try_cast("restaurant_id", "bigint").alias("restaurant_id"),
+        _restaurant_id("restaurant_id").alias("restaurant_id"),
         utc_ntz_to_local(utc, TIMEZONE).alias("created_at_local"),
         F.lower(F.trim("channel")).alias("channel"),
         F.lit("completed").alias("status"),

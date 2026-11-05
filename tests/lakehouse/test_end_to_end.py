@@ -140,7 +140,7 @@ def test_zomato_restaurant_through_the_same_tools(fetch: queries.Fetch) -> None:
     first, second = sales.days
     assert [c.channel for c in second.channels] == ["zomato_delivery"]
     assert first.revenue == 666.75  # 23:38 India time stays on 9/10
-    assert second.revenue == 300.0 and second.canceled_orders == 2  # 00:13 goes to 9/11
+    assert second.revenue == 300.0 and second.canceled_orders == 3  # 00:13 goes to 9/11
 
     items = queries.item_trends(
         fetch,

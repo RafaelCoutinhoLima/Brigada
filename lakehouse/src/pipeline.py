@@ -52,19 +52,19 @@ if brigada.SOURCE in SOURCES:
         return brigada.restaurants(dlt.read("bronze_brigada_restaurants"))
 
     @dlt.table(comment="Brigada synthetic menu items (conformed).")
-    @dlt.expect_all_or_drop(common.MENU_ITEM_EXPECTATIONS)
+    @dlt.expect_all_or_drop(build.EXPECTATIONS["silver_brigada_menu_items"])
     def silver_brigada_menu_items() -> DataFrame:
         return brigada.menu_items(dlt.read("bronze_brigada_menu_items"))
 
     @dlt.table(comment="Brigada synthetic orders with delivery times (conformed).")
-    @dlt.expect_all_or_drop(common.ORDER_EXPECTATIONS)
+    @dlt.expect_all_or_drop(build.EXPECTATIONS["silver_brigada_orders"])
     def silver_brigada_orders() -> DataFrame:
         return brigada.orders(
             dlt.read("bronze_brigada_orders"), dlt.read("bronze_brigada_deliveries")
         )
 
     @dlt.table(comment="Brigada synthetic order lines (conformed).")
-    @dlt.expect_all_or_drop(common.ORDER_ITEM_EXPECTATIONS)
+    @dlt.expect_all_or_drop(build.EXPECTATIONS["silver_brigada_order_items"])
     def silver_brigada_order_items() -> DataFrame:
         return brigada.order_items(
             dlt.read("bronze_brigada_order_items"), dlt.read("silver_brigada_orders")
@@ -80,7 +80,7 @@ if delivery_center.SOURCE in SOURCES:
         )
 
     @dlt.table(comment="Delivery Center orders of FOOD stores, UTC -> local (conformed).")
-    @dlt.expect_all_or_drop({**common.ORDER_EXPECTATIONS, **delivery_center.ORDER_EXPECTATIONS})
+    @dlt.expect_all_or_drop(build.EXPECTATIONS["silver_delivery_center_orders"])
     def silver_delivery_center_orders() -> DataFrame:
         return delivery_center.orders(
             dlt.read("bronze_delivery_center_orders"),
@@ -97,17 +97,17 @@ if zomato.SOURCE in SOURCES:
         return zomato.restaurants(dlt.read("bronze_zomato_orders"))
 
     @dlt.table(comment="Zomato dishes ever ordered, per outlet; no prices or categories.")
-    @dlt.expect_all_or_drop(common.MENU_ITEM_EXPECTATIONS)
+    @dlt.expect_all_or_drop(build.EXPECTATIONS["silver_zomato_menu_items"])
     def silver_zomato_menu_items() -> DataFrame:
         return zomato.menu_items(dlt.read("bronze_zomato_orders"))
 
     @dlt.table(comment="Zomato orders, India local time, rupees; no review text (conformed).")
-    @dlt.expect_all_or_drop({**common.ORDER_EXPECTATIONS, **zomato.ORDER_EXPECTATIONS})
+    @dlt.expect_all_or_drop(build.EXPECTATIONS["silver_zomato_orders"])
     def silver_zomato_orders() -> DataFrame:
         return zomato.orders(dlt.read("bronze_zomato_orders"))
 
     @dlt.table(comment="Zomato order lines parsed from 'Items in order'; price unknown (NULL).")
-    @dlt.expect_all_or_drop(common.ORDER_ITEM_EXPECTATIONS)
+    @dlt.expect_all_or_drop(build.EXPECTATIONS["silver_zomato_order_items"])
     def silver_zomato_order_items() -> DataFrame:
         return zomato.order_items(
             dlt.read("bronze_zomato_orders"), dlt.read("silver_zomato_orders")
